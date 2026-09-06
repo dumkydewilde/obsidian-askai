@@ -1,0 +1,142 @@
+<!doctype html>
+<!--
+  The sidebar, drawn against Obsidian's own app.css and the vault's theme, so layout
+  can be checked without quitting a running Obsidian to open a debug port.
+
+    node harness/prepare.mjs && open harness/index.html
+
+  The markup mirrors what view.ts and conversation.ts build. It is a copy, so it can
+  drift; check it against those two files when they change.
+-->
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<link rel="stylesheet" href="assets/app.css" />
+		<link rel="stylesheet" href="assets/theme.css" />
+		<link rel="stylesheet" href="../styles.css" />
+		<style>
+			body { margin: 0; height: 100vh; overflow: hidden; }
+			/* The right sidebar, at the width one actually gets. Inline width, because
+			   Obsidian's own `.workspace > .workspace-split` sets 100% and outranks a class. */
+			.harness-split { height: 100vh; margin-left: auto; }
+		</style>
+	</head>
+	<body class="theme-light mod-macos is-frameless">
+		<div class="app-container">
+			<div class="horizontal-main-container">
+				<div class="workspace">
+					<div class="workspace-split mod-horizontal mod-right-split harness-split" style="width: 380px">
+						<div class="workspace-tabs mod-top mod-top-right-space">
+							<div class="workspace-tab-container">
+								<div class="workspace-leaf">
+									<div class="workspace-leaf-content" data-type="ask-ai-view">
+										<div class="view-header"></div>
+										<div class="view-content ask-ai-view">
+											<div class="ask-ai-view-header">
+												<div class="ask-ai-view-title">LanceDB and motherduck research</div>
+												<button class="clickable-icon ask-ai-icon-button" data-icon="message-square-plus"></button>
+											</div>
+											<div class="ask-ai-body">
+												<div class="ask-ai-host">
+													<div class="ask-ai-conversation">
+														<div class="ask-ai-turns">
+															<div class="ask-ai-turn">
+																<div class="ask-ai-selection">-- what lance_vector_search really is
+SELECT image_id, l2_distance(clip_emb, :query_vector) AS _distance
+FROM merch_images
+ORDER BY _distance
+LIMIT 500;</div>
+																<div class="ask-ai-question">What does this do?</div>
+																<div class="ask-ai-status"><span>claude-opus-4-5 · 12.4s · 31.2k in · 780 out</span></div>
+																<div class="ask-ai-answer">
+																	<p>It is a brute-force k-nearest-neighbour scan: every row's <code>clip_emb</code> is compared against the query vector, sorted by distance, and the closest 500 come back. No index is consulted, which is why the plan reads the whole <code>merch_images</code> table.</p>
+																	<h3>Sources</h3>
+																	<ul>
+																		<li><a href="#">LanceDB and motherduck research</a> — "It's one table with one weird column"</li>
+																	</ul>
+																</div>
+																<button class="clickable-icon ask-ai-icon-button ask-ai-copy" data-icon="copy"></button>
+															</div>
+															<div class="ask-ai-turn">
+																<div class="ask-ai-question">Does the index ever get used?</div>
+																<div class="ask-ai-status is-running"><span>Read Ideas/LanceDB and motherduck research.md</span><span class="ask-ai-dots"><span></span><span></span><span></span></span></div>
+																<div class="ask-ai-answer ask-ai-streaming"><p>Only when the table is large enough that Lance has built one, and</p></div>
+																<div class="ask-ai-suggestions">
+																	<button class="ask-ai-suggestion">How does the hybrid execution split decide what runs locally?</button>
+																	<button class="ask-ai-suggestion">What breaks if the embeddings are regenerated with a different model?</button>
+																</div>
+															</div>
+														</div>
+														<div class="ask-ai-footer">
+															<div class="ask-ai-controls ask-ai-hidden">
+																<select class="dropdown"><option>Claude Code</option></select>
+																<select class="dropdown"><option>Default model</option></select>
+																<select class="dropdown"><option>Default effort</option></select>
+																<select class="dropdown"><option>Vault + web</option></select>
+															</div>
+															<div class="ask-ai-input-row">
+																<button class="clickable-icon ask-ai-icon-button" data-icon="settings-2"></button>
+																<button class="clickable-icon ask-ai-icon-button" data-icon="save"></button>
+																<textarea class="ask-ai-question-input" rows="1" placeholder="Ask…"></textarea>
+																<button class="clickable-icon ask-ai-icon-button ask-ai-send" data-icon="arrow-up"></button>
+															</div>
+														</div>
+													</div>
+												</div>
+											</div>
+										</div>
+									</div>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+		<div class="status-bar">
+			<div class="status-bar-item"><span class="status-bar-item-segment">0 backlinks</span></div>
+			<div class="status-bar-item"><span class="status-bar-item-segment">6 words 38 characters</span></div>
+		</div>
+		<script type="module">
+			const vault = await (await fetch("assets/vault.json")).json();
+			document.body.style.setProperty("--font-text-size", `${vault.fontSize}px`);
+
+			// Stand-ins for setIcon(): only the box they occupy matters here.
+			const paths = {
+				"settings-2": "M20 7h-9M14 17H5M17 14a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM7 4a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+				save: "M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8",
+				"arrow-up": "M12 19V5M5 12l7-7 7 7",
+				copy: "M20 9h-9a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2zM5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1",
+				"message-square-plus": "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2zM12 7v6M9 10h6",
+			};
+			for (const button of document.querySelectorAll("[data-icon]")) {
+				button.innerHTML = `<svg class="svg-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${paths[button.dataset.icon]}"/></svg>`;
+			}
+
+			// What the eye cannot check: whether our padding override actually won.
+			// view.ts measures the status bar rather than clearing it with a flat 32px.
+			const view = document.querySelector(".view-content.ask-ai-view");
+			const bar = document.querySelector(".status-bar");
+			view.style.setProperty(
+				"--ask-ai-bottom-clearance",
+				`${getComputedStyle(bar).position === "fixed" ? bar.offsetHeight : 0}px`,
+			);
+			const row = document.querySelector(".ask-ai-input-row");
+			const input = document.querySelector(".ask-ai-input-row .ask-ai-question-input");
+			window.measure = () => ({
+				theme: vault.theme,
+				noteFontSize: getComputedStyle(document.body).getPropertyValue("--font-text-size").trim(),
+				sidebarFontSize: getComputedStyle(view).fontSize,
+				viewPadding: getComputedStyle(view).padding,
+				gapUnderFooter: Math.round(view.getBoundingClientRect().bottom - row.getBoundingClientRect().bottom),
+				statusBarHeight: document.querySelector(".status-bar").offsetHeight,
+				footerClearsStatusBar:
+					row.getBoundingClientRect().bottom <= document.querySelector(".status-bar").getBoundingClientRect().top,
+				scrollbarInset: Math.round(view.getBoundingClientRect().right - document.querySelector(".ask-ai-turns").getBoundingClientRect().right),
+				inputWidth: Math.round(input.getBoundingClientRect().width),
+				rowWidth: Math.round(row.getBoundingClientRect().width),
+			});
+			document.title = JSON.stringify(window.measure());
+		</script>
+	</body>
+</html>

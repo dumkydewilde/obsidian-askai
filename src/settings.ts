@@ -1,11 +1,58 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type AskAiPlugin from "./main";
+import { DEFAULT_SYSTEM_PROMPT } from "./prompt";
 import { PROVIDERS, PROVIDER_IDS, PROVIDER_LABELS, providerOrDefault, type ProviderId } from "./providers";
+import type { ResearchTurn } from "./research";
 
-/** Which agent answered a note's last question, so a follow-up resumes the right one. */
+/** One exchange, kept so reopening the note shows the conversation rather than a blank pane. */
+export interface StoredTurn extends ResearchTurn {
+	/** The line under the question: which model, how long, tokens in and out. */
+	footer?: string;
+	/** The next questions offered under this answer. Only the newest turn shows them. */
+	suggestions?: string[];
+}
+
+/** A note's conversation: the agent thread to resume, and what is on screen. */
 export interface StoredSession {
 	provider: ProviderId;
 	id: string;
+	turns?: StoredTurn[];
+	/** The research note this conversation has been saved to, so a later save appends. */
+	researchPath?: string;
+	/** How many turns are already in that note. */
+	savedTurns?: number;
+	/** Last asked about, which is the order conversations are forgotten in. */
+	updated?: number;
+}
+
+/**
+ * Conversations are kept in the settings file, which is read whole at startup, so
+ * they are bounded on both axes: how many notes remember one, and how much of a long
+ * conversation is worth keeping. A research note is the durable home for an answer.
+ */
+const MAX_REMEMBERED_NOTES = 20;
+const MAX_STORED_CHARACTERS = 60_000;
+
+/** Newest turns first out of the budget, because those are the ones being continued. */
+export function trimTurns(turns: StoredTurn[]): StoredTurn[] {
+	const kept: StoredTurn[] = [];
+	let budget = MAX_STORED_CHARACTERS;
+	for (let i = turns.length - 1; i >= 0; i--) {
+		budget -= turns[i].question.length + turns[i].answer.length;
+		if (budget < 0 && kept.length) break;
+		kept.unshift(turns[i]);
+	}
+	return kept;
+}
+
+/** Drop the conversations nobody has touched in longest. */
+export function forgetOldest(sessions: Record<string, StoredSession>): void {
+	const paths = Object.keys(sessions);
+	if (paths.length <= MAX_REMEMBERED_NOTES) return;
+	paths
+		.sort((a, b) => (sessions[b].updated ?? 0) - (sessions[a].updated ?? 0))
+		.slice(MAX_REMEMBERED_NOTES)
+		.forEach((path) => delete sessions[path]);
 }
 
 export interface AskAiSettings {
@@ -27,47 +74,23 @@ export interface AskAiSettings {
 	surface: "modal" | "sidebar";
 	/** Where saved research notes go. Empty means beside the note they are about. */
 	researchFolder: string;
+	/** Whether every answer is written to that note as it arrives, rather than on a button. */
+	autoSave: boolean;
 	/** Heading in the source note that research links are collected under. */
 	backlinkHeading: string;
 	/** How the agent is told to answer, on every question. */
 	systemPrompt: string;
+	/**
+	 * The default `systemPrompt` was last given. An untouched prompt still equals it and
+	 * is replaced when the default improves; an edited one does not and is left alone.
+	 * Without it, telling the two apart meant keeping a copy of every default ever shipped.
+	 */
+	installedPrompt: string;
 	/** How long one question may run before the process is killed. */
 	timeoutSeconds: number;
 	/** Session per vault-relative note path, so follow-ups continue the right conversation. */
 	sessions: Record<string, StoredSession>;
 }
-
-export const DEFAULT_SYSTEM_PROMPT = [
-	"You are a researcher answering a question about a note in an Obsidian vault.",
-	"",
-	"Lead with the answer. The first sentence answers the question directly. Never open with what you " +
-		"searched for, what you could not find, or what the note does not contain.",
-	"",
-	"Answer from your own knowledge of the subject as well as from the vault. The vault is context, not " +
-		"the limit of what you know. A question about something the note never mentions is still a question " +
-		"you should answer.",
-	"",
-	"Ground every claim. Cite a vault note as [[note name]] or by heading. Cite a URL when the claim came " +
-		"from the web. When a claim is your own background knowledge, say so plainly rather than letting it " +
-		"read as if the vault said it.",
-	"",
-	"Close with a short Sources section: the vault notes and URLs you drew on, and one line on what you " +
-		"searched for only if it changes how much to trust the answer. Method belongs there, never at the top.",
-	"",
-	"Read the note before answering, and follow [[wikilinks]] with Grep or Glob when they matter. Write " +
-		"plain markdown. No preamble, no restating the question, no \"that said\". Be specific. Keep it tight " +
-		"unless asked for depth.",
-].join("\n");
-
-/**
- * Earlier defaults. The prompt is persisted, so a saved copy of one of these is an
- * untouched default rather than a customisation, and gets replaced on load.
- */
-export const SUPERSEDED_SYSTEM_PROMPTS = [
-	"You are answering questions about notes in an Obsidian vault. Read the note before answering. " +
-		"Follow [[wikilinks]] with Grep or Glob when they matter to the question. Answer in plain markdown " +
-		"with no preamble. Refer to sections of the note by heading. Keep it short unless asked for depth.",
-];
 
 /** Whether the web tools are offered to the agent. */
 export const WEB_OPTIONS: Record<string, string> = {
@@ -87,8 +110,10 @@ export const DEFAULT_SETTINGS: AskAiSettings = {
 	web: false,
 	surface: "modal",
 	researchFolder: "",
+	autoSave: false,
 	backlinkHeading: "## Research",
 	systemPrompt: DEFAULT_SYSTEM_PROMPT,
+	installedPrompt: DEFAULT_SYSTEM_PROMPT,
 	timeoutSeconds: 180,
 	sessions: {},
 };
@@ -127,14 +152,18 @@ export function migrate(saved: Partial<AskAiSettings> & LegacySettings): AskAiSe
 	return settings;
 }
 
-/** The effort values a provider accepts, with anything it does not understand dropped. */
+/**
+ * The effort values a provider accepts, with anything it does not understand dropped.
+ * Through providerOrDefault, because a settings file naming an agent this build does not
+ * have would otherwise take down whatever asked — and the sidebar asks on every note.
+ */
 export function effortFor(provider: ProviderId, effort: string): string {
-	return effort in PROVIDERS[provider].capabilities.efforts ? effort : "";
+	return effort in providerOrDefault(provider).capabilities.efforts ? effort : "";
 }
 
 /** Model options for a provider, plus whatever was typed into settings for it. */
 export function modelOptionsFor(provider: ProviderId, current: string): Record<string, string> {
-	const options = { ...PROVIDERS[provider].capabilities.models };
+	const options = { ...providerOrDefault(provider).capabilities.models };
 	if (current && !(current in options)) options[current] = current;
 	return options;
 }
@@ -294,6 +323,20 @@ export class AskAiSettingTab extends PluginSettingTab {
 						settings.researchFolder = value.trim();
 						await this.plugin.saveSettings();
 					}),
+			);
+
+		new Setting(containerEl)
+			.setName("Keep conversations in the vault")
+			.setDesc(
+				"Write each answer to its research note as it arrives, instead of waiting for the save " +
+					"button. Conversations become ordinary notes: searchable, linkable, and pickable by a " +
+					"Base through their `type: ask-ai-conversation` property.",
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(settings.autoSave).onChange(async (value) => {
+					settings.autoSave = value;
+					await this.plugin.saveSettings();
+				}),
 			);
 
 		new Setting(containerEl)

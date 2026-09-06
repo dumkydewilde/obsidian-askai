@@ -115,7 +115,7 @@ export class AnswerModal extends Modal {
 
 	constructor(app: App, plugin: AskAiPlugin, file: TFile, session: StoredSession | null, options: AskOptions) {
 		super(app);
-		this.conversation = new Conversation(app, plugin, this.component, file, session, options, () => this.close());
+		this.conversation = new Conversation(app, plugin, this.component, file, session, options);
 	}
 
 	override onOpen(): void {

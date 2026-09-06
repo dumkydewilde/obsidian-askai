@@ -3,15 +3,8 @@ import type { AskOptions } from "./conversation";
 import { AnswerModal, QuestionModal } from "./modals";
 import { providerOrDefault, type ProviderId } from "./providers";
 import { ASK_VIEW_TYPE, AskView } from "./view";
-import {
-	AskAiSettingTab,
-	DEFAULT_SYSTEM_PROMPT,
-	SUPERSEDED_SYSTEM_PROMPTS,
-	effortFor,
-	migrate,
-	type AskAiSettings,
-	type StoredSession,
-} from "./settings";
+import { DEFAULT_SYSTEM_PROMPT, SUPERSEDED_SYSTEM_PROMPTS } from "./prompt";
+import { AskAiSettingTab, effortFor, forgetOldest, migrate, trimTurns, type AskAiSettings, type StoredSession } from "./settings";
 
 export default class AskAiPlugin extends Plugin {
 	// Plugin declares `settings?: unknown`; this narrows it without emitting a field
@@ -49,7 +42,8 @@ export default class AskAiPlugin extends Plugin {
 		this.addCommand({
 			id: "open-sidebar",
 			name: "Open the sidebar",
-			callback: () => void this.revealSidebar(),
+			// Opened deliberately, so the next thing wanted is almost always to type.
+			callback: () => void this.revealSidebar().then((view) => view.focusInput()),
 		});
 
 		this.addCommand({
@@ -76,7 +70,9 @@ export default class AskAiPlugin extends Plugin {
 						.onClick(() => void this.startAsk(file, selection || null, { fresh: true })),
 				);
 
-				const session = this.settings.sessions[file.path];
+				// In the sidebar every question already lands in that note's conversation,
+				// so a separate follow-up item would be the same item twice.
+				const session = this.settings.surface === "modal" ? this.settings.sessions[file.path] : null;
 				if (session) {
 					menu.addItem((item) =>
 						item
@@ -146,21 +142,11 @@ export default class AskAiPlugin extends Plugin {
 				: `Ask about ${file.basename}`
 			: `Follow up about ${file.basename}`;
 
-		// A follow-up opens on the agent that holds the conversation, not on whatever
-		// the last question happened to use.
-		const provider = session?.provider ?? this.settings.provider;
-		const defaults: AskOptions = {
-			provider,
-			model: this.settings.models[provider] ?? "",
-			effort: effortFor(provider, this.settings.effort),
-			web: this.settings.web,
-		};
-
 		new QuestionModal(
 			this.app,
 			title,
 			selection,
-			defaults,
+			this.askOptions(file),
 			(id: ProviderId) => this.settings.models[id] ?? "",
 			(question, chosen) => {
 				// The choice made for one question becomes the default for the next.
@@ -181,9 +167,11 @@ export default class AskAiPlugin extends Plugin {
 		question: string,
 		selection: string | null,
 	): Promise<void> {
+		// The sidebar keeps a conversation per note, so a question joins the one that is
+		// already there rather than starting over; the icon in its header starts over.
 		if (this.settings.surface === "sidebar") {
 			const view = await this.revealSidebar();
-			await view.start(file, session, options, question, selection);
+			await view.ask(file, options, question, selection);
 			return;
 		}
 		const modal = new AnswerModal(this.app, this, file, session, options);
@@ -199,6 +187,21 @@ export default class AskAiPlugin extends Plugin {
 		if (!existing) await leaf.setViewState({ type: ASK_VIEW_TYPE, active: true });
 		await this.app.workspace.revealLeaf(leaf);
 		return leaf.view as AskView;
+	}
+
+	/**
+	 * Agent, model, effort and sources to open a question with. A note that already has
+	 * a conversation opens on the agent holding it, not on whatever the last question
+	 * anywhere happened to use.
+	 */
+	askOptions(file: TFile): AskOptions {
+		const provider = this.settings.sessions[file.path]?.provider ?? this.settings.provider;
+		return {
+			provider,
+			model: this.settings.models[provider] ?? "",
+			effort: effortFor(provider, this.settings.effort),
+			web: this.settings.web,
+		};
 	}
 
 	private activeFile(): TFile | null {
@@ -218,17 +221,33 @@ export default class AskAiPlugin extends Plugin {
 	}
 
 	async rememberSession(notePath: string, session: StoredSession): Promise<void> {
-		this.settings.sessions[notePath] = session;
+		this.settings.sessions[notePath] = {
+			...session,
+			turns: session.turns ? trimTurns(session.turns) : undefined,
+			updated: Date.now(),
+		};
+		forgetOldest(this.settings.sessions);
+		await this.saveSettings();
+	}
+
+	async forgetSession(notePath: string): Promise<void> {
+		if (!(notePath in this.settings.sessions)) return;
+		delete this.settings.sessions[notePath];
 		await this.saveSettings();
 	}
 
 	async loadSettings(): Promise<void> {
 		this.settings = migrate((await this.loadData()) ?? {});
 		// The prompt is persisted, so an old default would otherwise outlive every
-		// improvement to it. Only replace one nobody has edited.
-		if (SUPERSEDED_SYSTEM_PROMPTS.includes(this.settings.systemPrompt.trim())) {
-			this.settings.systemPrompt = DEFAULT_SYSTEM_PROMPT;
-		}
+		// improvement to it. Only replace one nobody has edited: either it still matches
+		// the default it was given, or it matches one shipped before that was recorded.
+		const prompt = this.settings.systemPrompt.trim();
+		const untouched =
+			!prompt ||
+			prompt === this.settings.installedPrompt.trim() ||
+			SUPERSEDED_SYSTEM_PROMPTS.some((old) => old.trim() === prompt);
+		if (untouched) this.settings.systemPrompt = DEFAULT_SYSTEM_PROMPT;
+		this.settings.installedPrompt = DEFAULT_SYSTEM_PROMPT;
 		await this.saveSettings();
 	}
 

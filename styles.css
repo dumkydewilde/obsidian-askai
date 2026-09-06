@@ -10,6 +10,8 @@
 	margin-bottom: var(--size-4-3);
 	padding-left: var(--size-4-3);
 	border-left: 3px solid var(--interactive-accent);
+	/* Clear of the copy button in the turn's corner. */
+	padding-right: var(--size-4-6);
 	color: var(--text-muted);
 	font-size: var(--font-ui-small);
 	white-space: pre-wrap;
@@ -32,18 +34,26 @@
 	overflow: hidden;
 }
 
-/* The sidebar hosts the same conversation, in a quarter of the width. Its text is a
-   step down from the editor's, which at sidebar width reads oversized. */
-.ask-ai-view {
+/* Two class names, because Obsidian's own `.workspace-leaf-content .view-content`
+   sets 12px of side padding and 32px under the content, and a single class loses to
+   it. That padding is what put the scrollbar in from the pane edge and left a band
+   of dead space under the buttons. */
+.view-content.ask-ai-view {
 	display: flex;
 	flex-direction: column;
 	min-height: 0;
 	padding: 0;
-	font-size: var(--font-ui-medium);
+	overflow: hidden;
+	/* A step under the note's own text. Tied to it rather than to a fixed UI size, so
+	   it stays a step under whatever the reading font size is set to. */
+	font-size: calc(var(--font-text-size) - 1px);
 }
 
 .ask-ai-view-header {
 	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
 	/* Aligned with the text column rather than the pane, so the rule under it does not
 	   run out past the words on either side. */
 	margin: 0 var(--size-4-3);
@@ -52,20 +62,37 @@
 	color: var(--text-muted);
 	font-size: var(--font-ui-small);
 	font-weight: var(--font-semibold);
+}
+
+.ask-ai-view-title {
+	flex: 1;
+	min-width: 0;
 	overflow-wrap: anywhere;
 }
 
 /* No horizontal padding: the scrollbar belongs against the pane edge, so the padding
-   that insets the text sits on the scrolling list and the footer instead. */
+   that insets the text sits on the scrolling list and the footer instead. The bottom
+   is whatever view.ts measured the floating status bar to be. */
 .ask-ai-body {
 	flex: 1;
 	min-height: 0;
 	display: flex;
 	flex-direction: column;
-	padding: 0 0 var(--size-4-3);
+	/* Clearance plus a gap, so the question box is not sitting on the status bar. */
+	padding-bottom: calc(var(--ask-ai-bottom-clearance, var(--size-4-6)) + var(--size-4-2));
 }
 
-.ask-ai-placeholder {
+/* One per note. All but the open note's are hidden rather than unmounted, so coming
+   back to a note finds its conversation, and its scroll position, where you left it. */
+.ask-ai-host {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.ask-ai-placeholder,
+.ask-ai-empty {
 	padding: var(--size-4-4) var(--size-4-3) 0;
 	color: var(--text-faint);
 	font-size: var(--font-ui-small);
@@ -100,6 +127,7 @@
 }
 
 .ask-ai-turn {
+	position: relative;
 	padding-bottom: var(--size-4-4);
 	margin-bottom: var(--size-4-4);
 	border-bottom: 1px solid var(--background-modifier-border);
@@ -113,14 +141,74 @@
 .ask-ai-question {
 	font-weight: var(--font-semibold);
 	white-space: pre-wrap;
+	/* Clear of the copy button in the corner. */
+	padding-right: var(--size-4-6);
+}
+
+/* Faint until you go for it, so it does not compete with the answer. */
+.ask-ai-copy {
+	position: absolute;
+	top: calc(-1 * var(--size-2-1));
+	right: 0;
+	opacity: 0.45;
+}
+
+.ask-ai-copy:hover,
+.ask-ai-copy:focus-visible {
+	opacity: 1;
 }
 
 .ask-ai-status {
+	display: flex;
+	align-items: flex-end;
+	gap: var(--size-2-2);
 	margin: var(--size-2-2) 0 var(--size-4-2);
 	color: var(--text-faint);
 	font-size: var(--font-ui-smaller);
 	font-family: var(--font-monospace);
+}
+
+/* min-width: 0 so a long tool label wraps rather than pushing the dots off the pane. */
+.ask-ai-status > span:first-child {
+	min-width: 0;
 	overflow-wrap: anywhere;
+}
+
+/* The only sign of life while a tool runs long. */
+.ask-ai-dots {
+	display: inline-flex;
+	flex: 0 0 auto;
+	align-items: center;
+	gap: 3px;
+	padding-bottom: 0.4em;
+}
+
+.ask-ai-dots span {
+	width: 3px;
+	height: 3px;
+	border-radius: 50%;
+	background-color: currentColor;
+	animation: ask-ai-pulse 1.2s ease-in-out infinite;
+}
+
+.ask-ai-dots span:nth-child(2) {
+	animation-delay: 0.15s;
+}
+
+.ask-ai-dots span:nth-child(3) {
+	animation-delay: 0.3s;
+}
+
+@keyframes ask-ai-pulse {
+	0%, 60%, 100% { opacity: 0.2; }
+	30% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ask-ai-dots span {
+		animation: none;
+		opacity: 0.5;
+	}
 }
 
 /* Muted while it streams; normal once the answer is final. */
@@ -157,33 +245,57 @@
 	white-space: pre-wrap;
 }
 
-.ask-ai-actions {
+/* The agent's own next questions, under the newest answer and nowhere else. */
+.ask-ai-suggestions {
 	display: flex;
-	flex-wrap: wrap;
-	gap: var(--size-4-2);
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--size-2-3);
 	margin-top: var(--size-4-3);
+}
+
+.ask-ai-turns .ask-ai-suggestion {
+	max-width: 100%;
+	height: auto;
+	padding: var(--size-2-2) var(--size-4-2);
+	border: 1px solid var(--background-modifier-border);
+	background-color: transparent;
+	box-shadow: none;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	text-align: left;
+	white-space: normal;
+	line-height: var(--line-height-tight);
+}
+
+.ask-ai-turns .ask-ai-suggestion:hover {
+	color: var(--text-normal);
+	border-color: var(--interactive-accent);
 }
 
 .ask-ai-footer {
 	flex-shrink: 0;
 	display: flex;
-	align-items: flex-end;
+	flex-direction: column;
 	gap: var(--size-4-2);
 	padding-top: var(--size-4-3);
 	border-top: 1px solid var(--background-modifier-border);
 }
 
-.ask-ai-footer .ask-ai-question-input {
-	min-height: 2.2em;
-	max-height: 10em;
-	resize: none;
+/* Settings and save on the left, send on the right, the question filling the rest. */
+.ask-ai-input-row {
+	display: flex;
+	align-items: flex-end;
+	gap: var(--size-4-1);
 }
 
-.ask-ai-footer-buttons {
-	display: flex;
-	flex-shrink: 0;
-	align-items: stretch;
-	gap: var(--size-4-2);
+.ask-ai-input-row .ask-ai-question-input {
+	flex: 1;
+	min-width: 0;
+	min-height: 2em;
+	max-height: 10em;
+	padding: var(--size-4-1) var(--size-4-2);
+	resize: none;
 }
 
 /* The agent and model dropdowns. In the question box they sit beside the Ask button;
@@ -200,7 +312,6 @@
 
 .ask-ai-footer .ask-ai-controls {
 	width: 100%;
-	margin-bottom: var(--size-4-2);
 }
 
 .ask-ai-footer .ask-ai-controls .dropdown {
@@ -214,24 +325,25 @@
 
 .ask-ai-icon-button {
 	flex: 0 0 auto;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	padding: 0 var(--size-4-2);
 }
 
 .ask-ai-icon-button.is-active {
 	color: var(--text-accent);
 }
 
-/* The sidebar is too narrow for the input and both buttons on one line. */
-.ask-ai-view .ask-ai-footer {
-	flex-direction: column;
-	align-items: stretch;
+.ask-ai-icon-button[disabled] {
+	opacity: 0.35;
+	cursor: default;
 }
 
-.ask-ai-view .ask-ai-footer-buttons button:not(.ask-ai-icon-button) {
-	flex: 1;
+.ask-ai-send {
+	color: var(--text-on-accent);
+	background-color: var(--interactive-accent);
+}
+
+.ask-ai-send:hover {
+	color: var(--text-on-accent);
+	background-color: var(--interactive-accent-hover);
 }
 
 .ask-ai-settings-textarea {
@@ -243,4 +355,52 @@
 	margin: calc(-1 * var(--size-4-2)) 0 var(--size-4-4);
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
+}
+
+/* Shown in the pane when the view fails to build, instead of nothing at all. */
+.ask-ai-crash {
+	margin: var(--size-4-3);
+	padding: var(--size-4-2);
+	border-radius: var(--radius-s);
+	background-color: var(--background-modifier-error);
+	color: var(--text-error);
+	font-size: var(--font-ui-smaller);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	user-select: text;
+}
+
+/* The pane the conversation sits on, so a button can sit opaque on top of the text
+   without guessing which surface it is over. */
+.ask-ai-view {
+	--ask-ai-surface: var(--background-secondary);
+}
+
+.ask-ai-modal {
+	--ask-ai-surface: var(--background-primary);
+}
+
+.ask-ai-has-block-copy {
+	position: relative;
+}
+
+/* Follows the pointer down the answer, so any one block can be lifted out. */
+.ask-ai-block-copy {
+	position: absolute;
+	right: 0;
+	opacity: 0;
+	pointer-events: none;
+	background-color: var(--ask-ai-surface, var(--background-primary));
+	box-shadow: 0 0 0 3px var(--ask-ai-surface, var(--background-primary));
+	transition: opacity 80ms ease;
+}
+
+.ask-ai-block-copy.is-visible {
+	opacity: 0.5;
+	pointer-events: auto;
+}
+
+.ask-ai-block-copy.is-visible:hover,
+.ask-ai-block-copy.is-visible:focus-visible {
+	opacity: 1;
 }

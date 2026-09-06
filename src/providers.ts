@@ -104,14 +104,30 @@ function clamp(text: string, max = 80): string {
 }
 
 /**
- * Prepended to the question for CLIs with no flag for a system prompt. A separate
- * flag would be better — the model can tell instructions from content — but codex
- * and gemini only take AGENTS.md and GEMINI.md, which live in the vault.
+ * Claude holds the system prompt as one, so an instruction about how to *end* an answer
+ * still applies at the end. For the CLIs that only get it prepended to the first
+ * question it is a page behind by then, and gone entirely on a resumed turn — Codex
+ * dropped the follow-up block on every question tried. So it is repeated after the
+ * question, and only while the prompt still asks for it, so deleting that paragraph
+ * from settings still turns the suggestions off.
  */
-function withSystemPrompt(context: RunContext): string {
-	const prompt = context.systemPrompt.trim();
-	if (!prompt) return context.prompt;
-	return `${prompt}\n\n---\n\n${context.prompt}`;
+function followUpReminder(context: RunContext): string {
+	return /```follow-ups/.test(context.systemPrompt)
+		? "\n\nEnd your answer with the ```follow-ups fenced block when there are useful next questions."
+		: "";
+}
+
+/**
+ * The question as a CLI with no system-prompt flag of its own needs to receive it: the
+ * instructions ahead of it on the turn that opens the conversation, and the one line
+ * that has to survive to the end of the answer after it, on every turn. A real flag
+ * would be better — the model could tell instructions from content — but codex and
+ * gemini only take AGENTS.md and GEMINI.md, which live in the vault.
+ */
+function inlinePrompt(context: RunContext): string {
+	const instructions = context.systemPrompt.trim();
+	const body = instructions && !context.resumeSessionId ? `${instructions}\n\n---\n\n${context.prompt}` : context.prompt;
+	return body + followUpReminder(context);
 }
 
 /** For CLIs whose web tools cannot be withheld by a flag. */
@@ -295,7 +311,7 @@ const codex: Provider = {
 		if (context.resumeSessionId) args.push(context.resumeSessionId);
 		// No --append-system-prompt equivalent, and --ignore-user-config drops the config
 		// file that could carry one, so it rides along with the question.
-		args.push(context.resumeSessionId ? context.prompt : withSystemPrompt(context));
+		args.push(inlinePrompt(context));
 		return args;
 	},
 
@@ -379,8 +395,7 @@ const gemini: Provider = {
 		const args = ["--output-format", "stream-json", "--approval-mode", "default", "--skip-trust"];
 		if (context.model) args.push("--model", context.model);
 		if (context.resumeSessionId) args.push("--resume", context.resumeSessionId);
-		const prompt = context.resumeSessionId ? context.prompt : withSystemPrompt(context);
-		args.push("--prompt", prompt + webInstruction(context.web));
+		args.push("--prompt", inlinePrompt(context) + webInstruction(context.web));
 		return args;
 	},
 
@@ -455,7 +470,7 @@ const custom: Provider = {
 		let usedPrompt = false;
 		for (const part of template) {
 			if (part === "{prompt}") {
-				args.push(withSystemPrompt(context));
+				args.push(inlinePrompt(context));
 				usedPrompt = true;
 			} else if (part === "{model}") {
 				if (context.model) args.push(context.model);
@@ -465,7 +480,7 @@ const custom: Provider = {
 		}
 		// A template that forgot the placeholder still gets the question, at the end,
 		// where every one of these CLIs takes it.
-		if (!usedPrompt) args.push(withSystemPrompt(context));
+		if (!usedPrompt) args.push(inlinePrompt(context));
 		return args;
 	},
 };

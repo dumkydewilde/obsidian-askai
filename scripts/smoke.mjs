@@ -20,7 +20,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // Exercise the real source, not a hand-copied version of it.
 const outdir = await mkdtemp(join(tmpdir(), "ask-ai-build-"));
 await esbuild.build({
-	entryPoints: [join(root, "src/runner.ts"), join(root, "src/providers.ts")],
+	entryPoints: [join(root, "src/runner.ts"), join(root, "src/providers.ts"), join(root, "src/suggestions.ts"), join(root, "src/prompt.ts")],
 	bundle: true,
 	format: "esm",
 	platform: "node",
@@ -29,6 +29,8 @@ await esbuild.build({
 });
 const { runAgent } = await import(pathToFileURL(join(outdir, "runner.js")).href);
 const { PROVIDERS, PROVIDER_IDS } = await import(pathToFileURL(join(outdir, "providers.js")).href);
+const { splitSuggestions } = await import(pathToFileURL(join(outdir, "suggestions.js")).href);
+const { DEFAULT_SYSTEM_PROMPT } = await import(pathToFileURL(join(outdir, "prompt.js")).href);
 
 const settings = {
 	provider: "claude",
@@ -41,10 +43,7 @@ const settings = {
 	surface: "modal",
 	researchFolder: "",
 	backlinkHeading: "## Research",
-	systemPrompt:
-		"You are answering questions about notes in an Obsidian vault. Read the note before answering. " +
-		"Follow [[wikilinks]] when they matter to the question. Answer in plain markdown with no preamble. " +
-		"Keep it short unless asked for depth.",
+	systemPrompt: DEFAULT_SYSTEM_PROMPT,
 	timeoutSeconds: 240,
 	sessions: {},
 };
@@ -119,6 +118,25 @@ async function runProvider(id) {
 			check(`${id}: follow-up resumes the session`, second.sessionId === first.sessionId);
 			check(`${id}: follow-up kept context`, /claim/i.test(second.answer), second.answer.slice(0, 70));
 		}
+
+		// The follow-up buttons only exist if the agent actually emits the block the
+		// prompt asks for, and it only parses if it emits it the way it was asked to.
+		const open = await ask(
+			id,
+			vault,
+			"Note: Ducks.md\n\nQuestion: Is it safe to keep ducks and geese in the same enclosure?",
+		);
+		const parsed = splitSuggestions(open.answer);
+		check(
+			`${id}: suggested follow-up questions`,
+			parsed.suggestions.length > 0 && parsed.suggestions.length <= 3,
+			parsed.suggestions.join(" | ") || open.answer.slice(-120),
+		);
+		check(
+			`${id}: the block is not left in the answer`,
+			!/follow-?ups?/i.test(parsed.answer),
+			parsed.answer.slice(-80),
+		);
 
 		// The vault is read-only, whatever the question asks for.
 		await ask(

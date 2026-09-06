@@ -7,6 +7,7 @@
     "dev": "node esbuild.config.mjs",
     "build": "tsc --noEmit && node esbuild.config.mjs production",
     "install-local": "node scripts/install-local.mjs",
+    "check": "node scripts/check.mjs",
     "smoke": "node scripts/smoke.mjs"
   },
   "devDependencies": {

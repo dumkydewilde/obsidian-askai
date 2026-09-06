@@ -47,9 +47,18 @@ export async function saveResearch(app: App, options: SaveOptions, turns: Resear
 
 	const link = app.fileManager.generateMarkdownLink(options.source, folder);
 	const body = withContents(
-		["---", `source: "${link.replace(/"/g, '\\"')}"`, `created: ${localTimestamp()}`, "---", "", turns.map(section).join("\n\n"), ""].join(
-			"\n",
-		),
+		[
+			"---",
+			// A property a Base can filter on, so conversations can be listed as a table
+			// without a folder query.
+			"type: ask-ai-conversation",
+			`source: "${link.replace(/"/g, '\\"')}"`,
+			`created: ${localTimestamp()}`,
+			"---",
+			"",
+			turns.map(section).join("\n\n"),
+			"",
+		].join("\n"),
 	);
 
 	const path = await uniquePath(app, folder, `${options.source.basename} — ${slug(turns[0].question)}`);

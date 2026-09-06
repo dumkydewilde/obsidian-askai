@@ -1,0 +1,157 @@
+<!doctype html>
+<!--
+  Loads the real built main.js against a stubbed Obsidian API and mounts the real
+  sidebar view, inside Obsidian's own app.css and the vault's theme. So a crash in
+  onOpen shows up here with a stack, and the layout is the layout the plugin builds
+  rather than a copy of it.
+
+    npm run build && node harness/prepare.mjs
+    python3 -m http.server 8901        # from the plugin root, not from harness/
+    open http://127.0.0.1:8901/harness/index.html
+
+  harness/turns.html is the same CSS with hand-written markup for a conversation
+  that already has answers in it.
+-->
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<link rel="stylesheet" href="assets/app.css" />
+		<link rel="stylesheet" href="assets/theme.css" />
+		<link rel="stylesheet" href="../styles.css" />
+		<style>
+			body { margin: 0; height: 100vh; overflow: hidden; }
+			.harness-split { height: 100vh; margin-left: auto; }
+			#harness-error {
+				position: fixed;
+				inset: 0 auto auto 0;
+				max-width: 60vw;
+				margin: 16px;
+				padding: 12px 16px;
+				background: #2b0b0b;
+				color: #ffb4b4;
+				font: 12px/1.5 ui-monospace, monospace;
+				white-space: pre-wrap;
+				z-index: 99;
+			}
+			#harness-error:empty { display: none; }
+		</style>
+	</head>
+	<body class="theme-light mod-macos is-frameless">
+		<pre id="harness-error"></pre>
+		<div class="app-container">
+			<div class="horizontal-main-container">
+				<div class="workspace">
+					<div class="workspace-split mod-horizontal mod-right-split harness-split" style="width: 380px">
+						<div class="workspace-tabs mod-top mod-top-right-space">
+							<div class="workspace-tab-container">
+								<div class="workspace-leaf" id="harness-leaf"></div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+		<div class="status-bar">
+			<div class="status-bar-item"><span class="status-bar-item-segment">0 backlinks</span></div>
+			<div class="status-bar-item"><span class="status-bar-item-segment">6 words 38 characters</span></div>
+		</div>
+		<script type="module">
+			import * as obsidian from "./obsidian-stub.js";
+			import { createApp } from "./app-stub.js";
+
+			const errorEl = document.getElementById("harness-error");
+			const fail = (what, error) => {
+				errorEl.textContent += `${what}\n${error?.stack ?? error}\n\n`;
+				document.title = `FAILED: ${what} — ${error?.message ?? error}`;
+			};
+			window.addEventListener("error", (e) => fail("uncaught", e.error ?? e.message));
+			window.addEventListener("unhandledrejection", (e) => fail("unhandled rejection", e.reason));
+
+			obsidian.installDomExtensions(window);
+			const vault = await (await fetch("assets/vault.json")).json();
+			document.body.style.setProperty("--font-text-size", `${vault.fontSize}px`);
+
+			// The built bundle is CJS and externalises the node builtins Obsidian provides.
+			const modules = {
+				obsidian,
+				child_process: { spawn: () => { throw new Error("the harness does not spawn agents"); } },
+				os: { homedir: () => "/harness" },
+				path: {},
+				fs: {},
+				electron: {},
+			};
+			const source = await (await fetch("../main.js")).text();
+			const module = { exports: {} };
+			new Function("require", "module", "exports", source)(
+				(name) => {
+					const found = modules[name];
+					if (!found) throw new Error(`harness has no stub for "${name}"`);
+					return found;
+				},
+				module,
+				module.exports,
+			);
+			const AskAiPlugin = module.exports.default;
+
+			// The real paths from the vault, so a remembered session is actually matched.
+			const data = await (await fetch("assets/data.json")).json().catch(() => ({ sessions: {} }));
+			const files = Object.keys(data.sessions ?? {});
+			if (!files.length) files.push("Ideas/A note.md");
+
+			// Seed a conversation, so reopening a note with history is what gets drawn.
+			const seeded = data.sessions?.[files[0]];
+			if (seeded) {
+				seeded.turns = [
+					{
+						question: "What does CUTOFF do?",
+						answer: "It is the per-mode similarity floor.\n\nSee [[LanceDB and motherduck research#Sources]].",
+						footer: "claude-opus-5 · 3.7s · 10.8k in · 173 out",
+						suggestions: ["Why is it per mode?", "What happens above it?"],
+					},
+				];
+				seeded.savedTurns = 0;
+			}
+
+			const { app, leaf, open } = createApp({
+				data,
+				files,
+				activePath: files[0],
+				leafContainer: document.getElementById("harness-leaf"),
+			});
+
+			const plugin = new AskAiPlugin(app, { id: "ask-ai", name: "Ask AI" });
+			await plugin.onload();
+
+			const factory = plugin.views.get("ask-ai-view");
+			if (!factory) throw new Error("the plugin never registered ask-ai-view");
+			const view = factory(leaf);
+			view.containerEl.setAttr("data-type", "ask-ai-view");
+			// Through open(), not onOpen(), so the load() step Obsidian runs first is run
+			// here too — that is where a field name colliding with the base class bites.
+			await view.open();
+			if (!view.contentEl.childElementCount) throw new Error("the view opened but rendered nothing");
+
+			// Switching notes is the whole point of the per-note conversations, so the
+			// harness exercises it rather than only the first render.
+			window.openNote = open;
+			window.notes = files;
+
+			const content = view.contentEl;
+			const row = content.querySelector(".ask-ai-input-row");
+			window.measure = () => ({
+				theme: vault.theme,
+				rendered: content.childElementCount,
+				header: content.querySelector(".ask-ai-view-title")?.textContent,
+				noteFontSize: getComputedStyle(document.body).getPropertyValue("--font-text-size").trim(),
+				sidebarFontSize: getComputedStyle(content).fontSize,
+				viewPadding: getComputedStyle(content).padding,
+				gapUnderFooter: row
+					? Math.round(content.getBoundingClientRect().bottom - row.getBoundingClientRect().bottom)
+					: null,
+				statusBarHeight: document.querySelector(".status-bar").offsetHeight,
+				inputWidth: row ? Math.round(row.querySelector("textarea").getBoundingClientRect().width) : null,
+			});
+			if (!errorEl.textContent) document.title = JSON.stringify(window.measure());
+		</script>
+	</body>
+</html>
