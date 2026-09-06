@@ -1,0 +1,18 @@
+{
+  "name": "ask-ai",
+  "version": "2.0.0",
+  "description": "Ask a coding-agent CLI about the current Obsidian note",
+  "private": true,
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc --noEmit && node esbuild.config.mjs production",
+    "install-local": "node scripts/install-local.mjs",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "esbuild": "^0.24.2",
+    "obsidian": "^1.7.2",
+    "typescript": "^5.7.2"
+  }
+}
