@@ -2,10 +2,11 @@ import { App, Component, MarkdownRenderer, Notice, TFile, setIcon, setTooltip } 
 import { PROVIDER_LABELS, providerOrDefault, type ProviderId } from "./providers";
 import { runAgent, type AskResult } from "./runner";
 import type AskAiPlugin from "./main";
-import { saveResearch } from "./research";
+import { appendConversation, createConversation, localTimestamp, safeName } from "./store";
 import { alignBlocks } from "./markdown";
-import { splitSuggestions, stripSuggestions } from "./suggestions";
-import { effortFor, modelOptionsFor, WEB_OPTIONS, type StoredSession, type StoredTurn } from "./settings";
+import { splitTrailing, stripTrailing } from "./trailing";
+import { effortFor, modelOptionsFor, storeOptions, WEB_OPTIONS } from "./settings";
+import { oneLine, type DocTurn } from "./document";
 
 /** What to run a question with, chosen per question rather than only in settings. */
 export interface AskOptions {
@@ -13,6 +14,32 @@ export interface AskOptions {
 	model: string;
 	effort: string;
 	web: boolean;
+}
+
+/**
+ * One conversation about one note. The note it is kept in is the record — this is what
+ * that file holds, kept in step as answers arrive so the list in the sidebar can show
+ * a conversation's title and length without reading it again.
+ */
+export interface ConversationRecord {
+	/** The note it lives in, once it has one. Null until the first answer is written. */
+	file: TFile | null;
+	/** Its name, which is also its filename. Empty until the first answer names it. */
+	title: string;
+	/** The agent holding the thread, and the thread. Only that agent can resume it. */
+	agent: string;
+	session: string;
+	created: string;
+	/** The next questions offered under the newest answer. */
+	suggestions: string[];
+	/** Anything written above the first question in the note, kept rather than dropped. */
+	preamble: string;
+	turns: DocTurn[];
+}
+
+/** A conversation that has not been asked anything yet, so has no note either. */
+export function newRecord(): ConversationRecord {
+	return { file: null, title: "", agent: "", session: "", created: "", suggestions: [], preamble: "", turns: [] };
 }
 
 /**
@@ -30,19 +57,21 @@ export class Conversation {
 	private suggestionsEl: HTMLElement | null = null;
 	private controller: AbortController | null = null;
 	private running = false;
-	private turns: StoredTurn[] = [];
-	/** Set once this conversation has a research note, so later saves append to it. */
-	private researchPath: string | null = null;
+	/** The same array as the record's, so the host list sees a new turn as it lands. */
+	private turns: DocTurn[] = [];
+	/** How many of them are in the note already. */
 	private savedTurns = 0;
 
 	constructor(
 		private app: App,
 		private plugin: AskAiPlugin,
 		private component: Component,
+		/** The note the conversation is about. */
 		public readonly file: TFile,
-		/** The note's last conversation, resumable only by the agent that started it. */
-		private session: StoredSession | null,
+		public readonly record: ConversationRecord,
 		private options: AskOptions,
+		/** Called when the note is written, so a host can redraw its list of them. */
+		private onWrite: () => void = () => {},
 	) {}
 
 	/** Adopt the agent and model a question was asked with from outside the sidebar. */
@@ -59,9 +88,14 @@ export class Conversation {
 	mount(containerEl: HTMLElement): void {
 		containerEl.addClass("ask-ai-conversation");
 		this.turnsEl = containerEl.createDiv({ cls: "ask-ai-turns" });
-		this.turns = this.session?.turns ?? [];
-		this.researchPath = this.session?.researchPath ?? null;
-		this.savedTurns = this.session?.savedTurns ?? 0;
+		this.turns = this.record.turns;
+		this.savedTurns = this.turns.length;
+		if (this.record.preamble) {
+			// Whatever you wrote in the note above the first question. Shown, because the
+			// note being the record is the point: editing it changes what this pane says.
+			const preamble = this.turnsEl.createDiv({ cls: "ask-ai-preamble" });
+			void MarkdownRenderer.render(this.app, this.record.preamble, preamble, this.file.path, this.component);
+		}
 		if (!this.turns.length) {
 			this.emptyEl = this.turnsEl.createDiv({
 				cls: "ask-ai-empty",
@@ -119,13 +153,13 @@ export class Conversation {
 	private async restore(): Promise<void> {
 		for (const [index, stored] of this.turns.entries()) {
 			const { turn, status, answerEl } = this.startTurn(stored.question, stored.selection ?? null);
-			status.settle(stored.footer ?? stored.agent ?? "");
+			status.settle(stored.footer ?? "");
 			answerEl.removeClass("ask-ai-streaming");
 			await MarkdownRenderer.render(this.app, stored.answer, answerEl, this.file.path, this.component);
 			this.addCopyButton(turn, stored.answer);
 			attachBlockCopy(answerEl, stored.answer);
 			// Only the newest answer's next questions are still worth offering.
-			if (index === this.turns.length - 1) this.renderSuggestions(turn, stored.suggestions ?? []);
+			if (index === this.turns.length - 1) this.renderSuggestions(turn, this.record.suggestions);
 		}
 		this.refreshSaveButton();
 		this.turnsEl.scrollTop = this.turnsEl.scrollHeight;
@@ -249,7 +283,7 @@ export class Conversation {
 
 		const notePath = this.file.path;
 		// A session belongs to the agent that opened it, so switching agents starts over.
-		const resumeSessionId = this.session?.provider === provider.id ? this.session.id : undefined;
+		const resumeSessionId = this.record.agent === provider.id ? this.record.session || undefined : undefined;
 		const controller = new AbortController();
 		this.controller = controller;
 		const render = new StreamingMarkdown(this.app, this.component, answerEl, notePath, () => this.turnsEl);
@@ -270,34 +304,32 @@ export class Conversation {
 				{
 					// The suggestions are stripped as they stream, so a half-written fence
 					// never flashes up as a code block mid-answer.
-					onAnswer: (markdown) => render.set(stripSuggestions(markdown)),
+					onAnswer: (markdown) => render.set(stripTrailing(markdown)),
 					onTool: (label) => status.setText(label),
 				},
 				controller.signal,
 			);
 
-			const { answer, suggestions } = splitSuggestions(result.answer);
+			const { answer, suggestions, title } = splitTrailing(result.answer);
 			const footer = formatFooter(result, provider.label);
 			answerEl.removeClass("ask-ai-streaming");
 			await render.finish(answer);
 			status.settle(footer);
-			this.turns.push({
-				question,
-				answer,
-				selection,
-				agent: result.model ?? provider.label,
-				footer,
-				suggestions,
-			});
-			if (result.sessionId) this.session = { provider: provider.id, id: result.sessionId };
-			await this.persist();
+			this.turns.push({ question, answer, selection, footer });
+			this.record.suggestions = suggestions;
+			// The agent names the conversation on its first answer, because the first
+			// question makes a poor name for it ("In one sentence, what is this note about?").
+			if (!this.record.title) this.record.title = safeName(title || oneLine(question).slice(0, 50));
+			if (result.sessionId) {
+				this.record.agent = provider.id;
+				this.record.session = result.sessionId;
+			}
 			this.addCopyButton(turn, answer);
 			attachBlockCopy(answerEl, answer);
 			this.renderSuggestions(turn, suggestions);
-			this.refreshSaveButton();
-			// The note is where a conversation lives if you want it to; the copy kept in
-			// settings is only so the pane can draw itself again.
-			if (this.plugin.settings.autoSave) await this.save(true);
+			// The note is the record, so it is written as the answer lands rather than on
+			// a button — unless you have turned that off, and then the button is the only way.
+			await this.write();
 		} catch (error) {
 			render.stop();
 			answerEl.removeClass("ask-ai-streaming");
@@ -328,60 +360,89 @@ export class Conversation {
 		this.turnsEl.scrollTop = this.turnsEl.scrollHeight;
 	}
 
-	/** One button for the whole conversation, not one per answer. */
+	/**
+	 * One button for the whole conversation, not one per answer. With conversations kept
+	 * in the vault it is never a save button — the note is already there — so it becomes
+	 * the way to open it.
+	 */
 	private refreshSaveButton(): void {
-		const unsaved = this.turns.length - this.savedTurns;
 		if (!this.turns.length) return;
-		if (unsaved === 0) {
-			setIcon(this.saveButton, "check");
-			setTooltip(this.saveButton, "Saved");
-			this.saveButton.setAttr("aria-label", "Saved");
-			this.saveButton.setAttr("disabled", "true");
+		const unsaved = this.turns.length - this.savedTurns;
+		if (this.record.file && !unsaved) {
+			setIcon(this.saveButton, "file-text");
+			this.label(this.saveButton, `Open ${this.record.file.basename}`);
+			this.saveButton.removeAttribute("disabled");
 			return;
 		}
-		const label = this.researchPath ? "Update note" : "Save to new note";
 		setIcon(this.saveButton, "save");
-		setTooltip(this.saveButton, label);
-		this.saveButton.setAttr("aria-label", label);
-		this.saveButton.removeAttribute("disabled");
+		this.label(this.saveButton, this.record.file ? "Update note" : "Save to new note");
+		this.saveButton.toggleAttribute("disabled", !unsaved);
 	}
 
-	private async save(quiet = false): Promise<void> {
-		this.saveButton.setAttr("disabled", "true");
-		try {
-			const note = await saveResearch(
-				this.app,
-				{
-					source: this.file,
-					folder: this.plugin.settings.researchFolder,
-					backlinkHeading: this.plugin.settings.backlinkHeading,
-					existingPath: this.researchPath,
-					alreadySaved: this.savedTurns,
-				},
-				this.turns,
-			);
-			const isNew = !this.researchPath;
-			this.researchPath = note.path;
-			this.savedTurns = this.turns.length;
-			await this.persist();
-			this.refreshSaveButton();
-			if (!quiet) new Notice(isNew ? `Saved to ${note.path}` : `Updated ${note.basename}`);
-		} catch (error) {
-			this.refreshSaveButton();
-			// Worth interrupting even on an automatic save: silence would read as saved.
-			new Notice(`Could not save: ${error instanceof Error ? error.message : String(error)}`);
+	private label(button: HTMLElement, label: string): void {
+		setTooltip(button, label);
+		button.setAttr("aria-label", label);
+	}
+
+	/** The button: open the note when it is current, otherwise write to it. */
+	private async save(): Promise<void> {
+		const file = this.record.file;
+		if (file && this.turns.length === this.savedTurns) {
+			await this.app.workspace.getLeaf("tab").openFile(file);
+			return;
+		}
+		await this.write(true);
+		if (this.record.file) {
+			new Notice(file ? `Updated ${this.record.file.basename}` : `Saved to ${this.record.file.path}`);
 		}
 	}
 
-	/** Keep the conversation, so the note shows it again after a restart. */
-	private async persist(): Promise<void> {
-		if (!this.session) return;
-		await this.plugin.rememberSession(this.file.path, {
-			...this.session,
-			turns: this.turns,
-			researchPath: this.researchPath ?? undefined,
-			savedTurns: this.savedTurns,
-		});
+	/**
+	 * Put the conversation in its note: create it on the first answer, append the new
+	 * turns after that so an answer you have since edited is left as you edited it.
+	 */
+	private async write(explicit = false): Promise<void> {
+		if (!explicit && !this.plugin.settings.keepInVault) {
+			this.refreshSaveButton();
+			return;
+		}
+		const fresh = this.turns.slice(this.savedTurns);
+		if (!fresh.length && this.record.file) return;
+
+		this.saveButton.setAttr("disabled", "true");
+		const updated = localTimestamp();
+		try {
+			if (this.record.file) {
+				await appendConversation(
+					this.app,
+					this.record.file,
+					{ agent: this.record.agent, session: this.record.session, updated, suggestions: this.record.suggestions },
+					fresh,
+				);
+			} else {
+				this.record.created = updated;
+				this.record.file = await createConversation(
+					this.app,
+					storeOptions(this.plugin.settings),
+					this.file,
+					this.record.title,
+					{
+						agent: this.record.agent,
+						session: this.record.session,
+						created: updated,
+						updated,
+						suggestions: this.record.suggestions,
+					},
+					this.turns,
+				);
+			}
+			this.savedTurns = this.turns.length;
+		} catch (error) {
+			// Worth interrupting even when it was not asked for: silence would read as saved.
+			new Notice(`Could not write the conversation note: ${error instanceof Error ? error.message : String(error)}`);
+		}
+		this.refreshSaveButton();
+		this.onWrite();
 	}
 
 	private addCopyButton(turn: HTMLElement, answer: string): void {

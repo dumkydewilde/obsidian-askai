@@ -1,15 +1,27 @@
 import { Editor, FileSystemAdapter, MarkdownView, Menu, Notice, Plugin, TFile, WorkspaceLeaf } from "obsidian";
-import type { AskOptions } from "./conversation";
+import { newRecord, type AskOptions, type ConversationRecord } from "./conversation";
+import { oneLine } from "./document";
 import { AnswerModal, QuestionModal } from "./modals";
-import { providerOrDefault, type ProviderId } from "./providers";
+import { isProviderId, PROVIDERS, type ProviderId } from "./providers";
+import { conversationsFor, createConversation, localTimestamp, readConversation, safeName, titleOf } from "./store";
 import { ASK_VIEW_TYPE, AskView } from "./view";
 import { DEFAULT_SYSTEM_PROMPT, SUPERSEDED_SYSTEM_PROMPTS } from "./prompt";
-import { AskAiSettingTab, effortFor, forgetOldest, migrate, trimTurns, type AskAiSettings, type StoredSession } from "./settings";
+import {
+	AskAiSettingTab,
+	effortFor,
+	legacySessions,
+	migrate,
+	storeOptions,
+	type AskAiSettings,
+	type LegacySession,
+} from "./settings";
 
 export default class AskAiPlugin extends Plugin {
 	// Plugin declares `settings?: unknown`; this narrows it without emitting a field
 	// that would shadow the base property.
 	declare settings: AskAiSettings;
+	/** Conversations an older settings file was still holding, written out as notes below. */
+	private legacy: Record<string, LegacySession> = {};
 
 	override async onload(): Promise<void> {
 		await this.loadSettings();
@@ -70,13 +82,16 @@ export default class AskAiPlugin extends Plugin {
 						.onClick(() => void this.startAsk(file, selection || null, { fresh: true })),
 				);
 
-				// In the sidebar every question already lands in that note's conversation,
-				// so a separate follow-up item would be the same item twice.
-				const session = this.settings.surface === "modal" ? this.settings.sessions[file.path] : null;
-				if (session) {
+				// In the sidebar every question already lands in the open conversation, so a
+				// separate follow-up item would be the same item twice.
+				const latest = this.settings.surface === "modal" ? conversationsFor(this.app, file)[0] : null;
+				if (latest) {
+					// Named, because a note can have several, and this continues the newest.
+					const agent = String(this.app.metadataCache.getFileCache(latest)?.frontmatter?.agent ?? "");
+					const with_ = isProviderId(agent) ? ` with ${PROVIDERS[agent].label}` : "";
 					menu.addItem((item) =>
 						item
-							.setTitle(`Follow up with ${providerOrDefault(session.provider).label}`)
+							.setTitle(`Follow up on ${titleOf(latest, file)}${with_}`)
 							.setIcon("corner-down-right")
 							.onClick(() => void this.startAsk(file, null, { fresh: false })),
 					);
@@ -96,26 +111,55 @@ export default class AskAiPlugin extends Plugin {
 			}),
 		);
 
-		// A remembered session is about a note, not a path. Follow the note when it
-		// moves, and forget it when the note is gone, so a follow-up can never resume
-		// a conversation about different content.
-		this.registerEvent(
-			this.app.vault.on("rename", (file, oldPath) => {
-				const session = this.settings.sessions[oldPath];
-				if (!session) return;
-				delete this.settings.sessions[oldPath];
-				this.settings.sessions[file.path] = session;
-				void this.saveSettings();
-			}),
-		);
+		// Nothing here follows a note that moves or is deleted: a conversation is a note
+		// linked to the one it is about, and Obsidian maintains that link itself.
+		this.app.workspace.onLayoutReady(() => void this.importLegacyConversations());
+	}
 
-		this.registerEvent(
-			this.app.vault.on("delete", (file) => {
-				if (!(file.path in this.settings.sessions)) return;
-				delete this.settings.sessions[file.path];
-				void this.saveSettings();
-			}),
-		);
+	/**
+	 * Conversations used to live in the settings file. They are notes now, so the ones
+	 * an older install is still holding are written out once and then let go of.
+	 */
+	private async importLegacyConversations(): Promise<void> {
+		const entries = Object.entries(this.legacy).filter(([, session]) => session.turns?.length);
+		this.legacy = {};
+		if (!entries.length || !this.vaultPathOrNull()) return;
+
+		let written = 0;
+		for (const [path, session] of entries) {
+			const source = this.app.vault.getAbstractFileByPath(path);
+			if (!(source instanceof TFile)) continue;
+			const turns = (session.turns ?? []).map((turn) => ({
+				question: turn.question,
+				answer: turn.answer,
+				selection: turn.selection ?? null,
+				// The footer is what the pane showed; older turns only recorded the model.
+				footer: turn.footer ?? turn.agent,
+			}));
+			const created = localTimestamp();
+			try {
+				await createConversation(
+					this.app,
+					storeOptions(this.settings),
+					source,
+					safeName(oneLine(turns[0].question).slice(0, 50)),
+					{
+						agent: session.provider,
+						session: session.id,
+						created,
+						updated: created,
+						suggestions: session.turns?.[session.turns.length - 1]?.suggestions ?? [],
+					},
+					turns,
+				);
+				written++;
+			} catch (error) {
+				console.error(`Ask AI could not move the conversation about ${path} into the vault`, error);
+			}
+		}
+		if (written) {
+			new Notice(`Ask AI moved ${written} ${written === 1 ? "conversation" : "conversations"} into your vault as notes.`);
+		}
 	}
 
 	/**
@@ -135,7 +179,7 @@ export default class AskAiPlugin extends Plugin {
 			}
 		}
 
-		const session = options.fresh ? null : this.settings.sessions[file.path] ?? null;
+		const record = options.fresh ? newRecord() : await this.latestRecord(file);
 		const title = options.fresh
 			? selection
 				? "Ask about the selection"
@@ -146,7 +190,7 @@ export default class AskAiPlugin extends Plugin {
 			this.app,
 			title,
 			selection,
-			this.askOptions(file),
+			this.askOptions(record.agent),
 			(id: ProviderId) => this.settings.models[id] ?? "",
 			(question, chosen) => {
 				// The choice made for one question becomes the default for the next.
@@ -155,14 +199,14 @@ export default class AskAiPlugin extends Plugin {
 				this.settings.effort = chosen.effort;
 				this.settings.web = chosen.web;
 				void this.saveSettings();
-				void this.startConversation(file, session, chosen, question, selection);
+				void this.startConversation(file, record, chosen, question, selection);
 			},
 		).open();
 	}
 
 	private async startConversation(
 		file: TFile,
-		session: StoredSession | null,
+		record: ConversationRecord,
 		options: AskOptions,
 		question: string,
 		selection: string | null,
@@ -174,7 +218,7 @@ export default class AskAiPlugin extends Plugin {
 			await view.ask(file, options, question, selection);
 			return;
 		}
-		const modal = new AnswerModal(this.app, this, file, session, options);
+		const modal = new AnswerModal(this.app, this, file, record, options);
 		modal.open();
 		void modal.ask(question, selection);
 	}
@@ -190,18 +234,25 @@ export default class AskAiPlugin extends Plugin {
 	}
 
 	/**
-	 * Agent, model, effort and sources to open a question with. A note that already has
-	 * a conversation opens on the agent holding it, not on whatever the last question
-	 * anywhere happened to use.
+	 * Agent, model, effort and sources to open a question with. A conversation already
+	 * under way opens on the agent holding it, because only that agent can resume the
+	 * thread — but it is a default, so choosing another agent for this question still wins.
 	 */
-	askOptions(file: TFile): AskOptions {
-		const provider = this.settings.sessions[file.path]?.provider ?? this.settings.provider;
+	askOptions(agent = ""): AskOptions {
+		const provider = isProviderId(agent) ? agent : this.settings.provider;
 		return {
 			provider,
 			model: this.settings.models[provider] ?? "",
 			effort: effortFor(provider, this.settings.effort),
 			web: this.settings.web,
 		};
+	}
+
+	/** The note's newest conversation, for a follow-up that is not going to the sidebar. */
+	private async latestRecord(file: TFile): Promise<ConversationRecord> {
+		const latest = conversationsFor(this.app, file)[0];
+		if (!latest) return newRecord();
+		return { file: latest, title: titleOf(latest, file), ...(await readConversation(this.app, latest)) };
 	}
 
 	private activeFile(): TFile | null {
@@ -220,24 +271,10 @@ export default class AskAiPlugin extends Plugin {
 		return path;
 	}
 
-	async rememberSession(notePath: string, session: StoredSession): Promise<void> {
-		this.settings.sessions[notePath] = {
-			...session,
-			turns: session.turns ? trimTurns(session.turns) : undefined,
-			updated: Date.now(),
-		};
-		forgetOldest(this.settings.sessions);
-		await this.saveSettings();
-	}
-
-	async forgetSession(notePath: string): Promise<void> {
-		if (!(notePath in this.settings.sessions)) return;
-		delete this.settings.sessions[notePath];
-		await this.saveSettings();
-	}
-
 	async loadSettings(): Promise<void> {
-		this.settings = migrate((await this.loadData()) ?? {});
+		const saved = (await this.loadData()) ?? {};
+		this.settings = migrate(saved);
+		this.legacy = legacySessions(saved);
 		// The prompt is persisted, so an old default would otherwise outlive every
 		// improvement to it. Only replace one nobody has edited: either it still matches
 		// the default it was given, or it matches one shipped before that was recorded.

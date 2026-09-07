@@ -1,24 +1,20 @@
 import { ItemView, TAbstractFile, TFile, WorkspaceLeaf, setIcon, setTooltip } from "obsidian";
-import { Conversation, type AskOptions } from "./conversation";
+import type { AskOptions } from "./conversation";
 import type AskAiPlugin from "./main";
+import { NoteHost } from "./notehost";
 
 export const ASK_VIEW_TYPE = "ask-ai-view";
 
-/** Untouched conversations are free to rebuild, so only a few are kept around. */
-const MAX_IDLE_CONVERSATIONS = 8;
-
-interface Hosted {
-	conversation: Conversation;
-	el: HTMLElement;
-}
+/** Notes nothing was asked about are free to rebuild, so only a few are kept around. */
+const MAX_IDLE_NOTES = 8;
 
 /**
- * Hosts one conversation per note in the sidebar, showing whichever note is open.
- * Switching notes puts that note's conversation back exactly as you left it, still
- * running if it was running, rather than throwing it away.
+ * Hosts a note's conversations in the sidebar, showing whichever note is open.
+ * Switching notes puts that note's conversations back exactly as you left them, still
+ * running if one was running, rather than throwing them away.
  */
 export class AskView extends ItemView {
-	private conversations = new Map<string, Hosted>();
+	private hosts = new Map<string, NoteHost>();
 	private activePath: string | null = null;
 	private bodyEl!: HTMLElement;
 	/**
@@ -70,9 +66,9 @@ export class AskView extends ItemView {
 		this.noteTitleEl = header.createDiv({ cls: "ask-ai-view-title", text: "Ask AI" });
 		const reset = header.createEl("button", { cls: "clickable-icon ask-ai-icon-button" });
 		setIcon(reset, "message-square-plus");
-		setTooltip(reset, "Start over on this note");
-		reset.setAttr("aria-label", "Start over on this note");
-		reset.addEventListener("click", () => void this.reset());
+		setTooltip(reset, "New conversation about this note");
+		reset.setAttr("aria-label", "New conversation about this note");
+		reset.addEventListener("click", () => void this.startNew());
 		this.bodyEl = this.contentEl.createDiv({ cls: "ask-ai-body" });
 		this.placeholderEl = this.bodyEl.createDiv({
 			cls: "ask-ai-placeholder",
@@ -82,16 +78,30 @@ export class AskView extends ItemView {
 		this.clearStatusBar();
 		this.registerEvent(this.app.workspace.on("resize", () => this.clearStatusBar()));
 		this.registerEvent(this.app.workspace.on("file-open", (file) => this.show(file)));
-		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.rekey(file, oldPath)));
-		this.registerEvent(this.app.vault.on("delete", (file) => this.forget(file.path)));
+		// A conversation is a note, so the list of them is whatever is in the vault: a file
+		// created, renamed or deleted anywhere may be one of the open note's conversations.
+		const refresh = () => this.current()?.scheduleRefresh();
+		this.registerEvent(
+			this.app.vault.on("rename", (file, oldPath) => {
+				this.rekey(file, oldPath);
+				refresh();
+			}),
+		);
+		this.registerEvent(
+			this.app.vault.on("delete", (file) => {
+				this.forget(file.path);
+				refresh();
+			}),
+		);
+		this.registerEvent(this.app.vault.on("create", refresh));
 		// Not straight away: onOpen can run while the workspace is still being restored,
 		// and the note this pane is supposed to be about is whichever one ends up open.
 		this.app.workspace.onLayoutReady(() => this.show(this.app.workspace.getActiveFile()));
 	}
 
 	override async onClose(): Promise<void> {
-		for (const { conversation } of this.conversations.values()) conversation.destroy();
-		this.conversations.clear();
+		for (const host of this.hosts.values()) host.destroy();
+		this.hosts.clear();
 		this.activePath = null;
 	}
 
@@ -107,7 +117,7 @@ export class AskView extends ItemView {
 		this.contentEl.style.setProperty("--ask-ai-bottom-clearance", `${overlaps ? bar.offsetHeight : 0}px`);
 	}
 
-	show(file: TFile | null): Conversation | null {
+	show(file: TFile | null): NoteHost | null {
 		try {
 			return this.showOrThrow(file);
 		} catch (error) {
@@ -117,59 +127,42 @@ export class AskView extends ItemView {
 		}
 	}
 
-	/** Show this note's conversation, starting one if it does not have one yet. */
-	private showOrThrow(file: TFile | null): Conversation | null {
+	/** Show this note's conversations, starting a first one if it has none. */
+	private showOrThrow(file: TFile | null): NoteHost | null {
 		if (!file || file.extension !== "md") return this.current();
 		if (file.path === this.activePath) return this.current();
 
-		if (this.activePath) this.conversations.get(this.activePath)?.el.addClass("ask-ai-hidden");
+		if (this.activePath) this.hosts.get(this.activePath)?.el.addClass("ask-ai-hidden");
 
 		this.placeholderEl.addClass("ask-ai-hidden");
 		this.noteTitleEl.setText(file.basename);
 		this.activePath = file.path;
 
-		const existing = this.conversations.get(file.path);
+		const existing = this.hosts.get(file.path);
 		if (existing) {
 			existing.el.removeClass("ask-ai-hidden");
+			existing.scheduleRefresh();
 			this.prune();
-			return existing.conversation;
+			return existing;
 		}
 
-		const el = this.bodyEl.createDiv({ cls: "ask-ai-host" });
-		const conversation = new Conversation(
-			this.app,
-			this.plugin,
-			this,
-			file,
-			this.plugin.settings.sessions[file.path] ?? null,
-			this.plugin.askOptions(file),
-		);
-		conversation.mount(el);
-		this.conversations.set(file.path, { conversation, el });
+		const el = this.bodyEl.createDiv({ cls: "ask-ai-note-host" });
+		const host = new NoteHost(this.app, this.plugin, this, file, el);
+		this.hosts.set(file.path, host);
+		void host.load();
 		this.prune();
-		return conversation;
+		return host;
 	}
 
-	/** Show this note's conversation and run a question in it. */
+	/** Show this note's conversations and run a question in the open one. */
 	async ask(file: TFile, options: AskOptions, question: string, selection: string | null): Promise<void> {
-		const conversation = this.show(file);
-		if (!conversation) return;
-		conversation.setOptions(options);
-		await conversation.ask(question, selection);
+		const host = this.show(file);
+		await host?.ask(options, question, selection);
 	}
 
-	/**
-	 * Throw away this note's conversation and the session behind it, so the next
-	 * question starts the agent over rather than resuming what is on screen.
-	 */
-	async reset(): Promise<void> {
-		const path = this.activePath;
-		const file = path ? this.app.vault.getAbstractFileByPath(path) : null;
-		if (!path || !(file instanceof TFile)) return;
-		this.forget(path);
-		await this.plugin.forgetSession(path);
-		this.placeholderEl.addClass("ask-ai-hidden");
-		this.show(file)?.focusInput();
+	/** A second conversation about the same note, rather than adding to the open one. */
+	async startNew(): Promise<void> {
+		await this.current()?.startNew();
 	}
 
 	/** Put the caret in the question box of whichever note is showing. */
@@ -177,16 +170,16 @@ export class AskView extends ItemView {
 		this.current()?.focusInput();
 	}
 
-	private current(): Conversation | null {
-		return this.activePath ? this.conversations.get(this.activePath)?.conversation ?? null : null;
+	private current(): NoteHost | null {
+		return this.activePath ? this.hosts.get(this.activePath) ?? null : null;
 	}
 
 	/** A conversation is about a note, not a path, so it follows the note when it moves. */
 	private rekey(file: TAbstractFile, oldPath: string): void {
-		const entry = this.conversations.get(oldPath);
-		if (!entry) return;
-		this.conversations.delete(oldPath);
-		this.conversations.set(file.path, entry);
+		const host = this.hosts.get(oldPath);
+		if (!host) return;
+		this.hosts.delete(oldPath);
+		this.hosts.set(file.path, host);
 		if (this.activePath === oldPath) {
 			this.activePath = file.path;
 			if (file instanceof TFile) this.noteTitleEl.setText(file.basename);
@@ -194,25 +187,25 @@ export class AskView extends ItemView {
 	}
 
 	private forget(path: string): void {
-		const entry = this.conversations.get(path);
-		if (!entry) return;
-		entry.conversation.destroy();
-		entry.el.remove();
-		this.conversations.delete(path);
+		const host = this.hosts.get(path);
+		if (!host) return;
+		host.destroy();
+		host.el.remove();
+		this.hosts.delete(path);
 		if (this.activePath !== path) return;
 		this.activePath = null;
 		this.noteTitleEl.setText("Ask AI");
 		this.placeholderEl.removeClass("ask-ai-hidden");
 	}
 
-	/** Drop conversations nobody asked anything in. One with turns is never dropped. */
+	/** Drop notes nobody asked anything about. One with a conversation is never dropped. */
 	private prune(): void {
-		for (const [path, entry] of this.conversations) {
-			if (this.conversations.size <= MAX_IDLE_CONVERSATIONS) return;
-			if (path === this.activePath || !entry.conversation.isEmpty) continue;
-			entry.conversation.destroy();
-			entry.el.remove();
-			this.conversations.delete(path);
+		for (const [path, host] of this.hosts) {
+			if (this.hosts.size <= MAX_IDLE_NOTES) return;
+			if (path === this.activePath || !host.isEmpty) continue;
+			host.destroy();
+			host.el.remove();
+			this.hosts.delete(path);
 		}
 	}
 }

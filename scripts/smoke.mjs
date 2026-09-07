@@ -20,7 +20,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // Exercise the real source, not a hand-copied version of it.
 const outdir = await mkdtemp(join(tmpdir(), "ask-ai-build-"));
 await esbuild.build({
-	entryPoints: [join(root, "src/runner.ts"), join(root, "src/providers.ts"), join(root, "src/suggestions.ts"), join(root, "src/prompt.ts")],
+	entryPoints: [join(root, "src/runner.ts"), join(root, "src/providers.ts"), join(root, "src/trailing.ts"), join(root, "src/prompt.ts")],
 	bundle: true,
 	format: "esm",
 	platform: "node",
@@ -29,7 +29,7 @@ await esbuild.build({
 });
 const { runAgent } = await import(pathToFileURL(join(outdir, "runner.js")).href);
 const { PROVIDERS, PROVIDER_IDS } = await import(pathToFileURL(join(outdir, "providers.js")).href);
-const { splitSuggestions } = await import(pathToFileURL(join(outdir, "suggestions.js")).href);
+const { splitTrailing } = await import(pathToFileURL(join(outdir, "trailing.js")).href);
 const { DEFAULT_SYSTEM_PROMPT } = await import(pathToFileURL(join(outdir, "prompt.js")).href);
 
 const settings = {
@@ -41,11 +41,13 @@ const settings = {
 	effort: "",
 	web: false,
 	surface: "modal",
-	researchFolder: "",
+	conversationLocation: "folder",
+	conversationFolder: "askai-conversations",
+	conversationSubfolder: true,
+	keepInVault: true,
 	backlinkHeading: "## Research",
 	systemPrompt: DEFAULT_SYSTEM_PROMPT,
 	timeoutSeconds: 240,
-	sessions: {},
 };
 
 const requested = process.argv.slice(2).filter((arg) => !arg.startsWith("-"));
@@ -126,15 +128,22 @@ async function runProvider(id) {
 			vault,
 			"Note: Ducks.md\n\nQuestion: Is it safe to keep ducks and geese in the same enclosure?",
 		);
-		const parsed = splitSuggestions(open.answer);
+		const parsed = splitTrailing(open.answer);
 		check(
 			`${id}: suggested follow-up questions`,
 			parsed.suggestions.length > 0 && parsed.suggestions.length <= 3,
 			parsed.suggestions.join(" | ") || open.answer.slice(-120),
 		);
+		// The title names the conversation note, so a missing one means every conversation
+		// is filed under its first question instead.
 		check(
-			`${id}: the block is not left in the answer`,
-			!/follow-?ups?/i.test(parsed.answer),
+			`${id}: named the conversation`,
+			parsed.title.length > 0 && parsed.title.length < 80,
+			parsed.title || open.answer.slice(-120),
+		);
+		check(
+			`${id}: neither block is left in the answer`,
+			!/follow-?ups?/i.test(parsed.answer) && !/^```title/m.test(parsed.answer),
 			parsed.answer.slice(-80),
 		);
 

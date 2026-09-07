@@ -68,13 +68,83 @@
 			window.addEventListener("unhandledrejection", (e) => fail("unhandled rejection", e.reason));
 
 			obsidian.installDomExtensions(window);
+			// runner.ts builds a PATH from the environment before it spawns anything.
+			window.process = { env: { PATH: "/usr/bin:/bin" }, platform: "darwin" };
+
+			/**
+			 * Claude Code's stream-json, from a script rather than a process: the init
+			 * line, a turn, the answer arriving in pieces, then the result with usage. So
+			 * the parser, the streaming render, the trailing blocks and the note write all
+			 * run here exactly as they do against the real binary.
+			 */
+			function fakeAgent(binary, args) {
+				const resumed = args.includes("--resume");
+				const question = args[args.length - 1];
+				const answer = [
+					resumed
+						? "Above the cutoff every candidate is returned unranked."
+						: `The cutoff is the per-mode similarity floor, and it is only consulted above 100k rows.`,
+					"",
+					"## Sources",
+					"",
+					`- [[${window.notes[0].split("/").pop().replace(/\.md$/, "")}#Some content]]`,
+					"",
+					"```follow-ups",
+					"Why is it per mode?",
+					"What happens above it?",
+					"```",
+					...(resumed ? [] : ["", "```title", "Similarity floor and row counts", "```"]),
+				].join("\n");
+
+				const listeners = new Map();
+				const stream = () => ({
+					setEncoding() {},
+					on(event, fn) {
+						listeners.set(`out:${event}`, fn);
+					},
+				});
+				const child = {
+					stdout: stream(),
+					stderr: { setEncoding() {}, on() {} },
+					on(event, fn) {
+						listeners.set(event, fn);
+					},
+					kill() {
+						listeners.get("close")?.(null);
+					},
+				};
+				setTimeout(() => {
+					const send = (line) => listeners.get("out:data")?.(`${JSON.stringify(line)}\n`);
+					send({ type: "system", subtype: "init", model: "claude-opus-5", session_id: "harness-session" });
+					send({ type: "stream_event", event: { type: "message_start" } });
+					for (const chunk of answer.match(/[\s\S]{1,40}/g) ?? []) {
+						send({
+							type: "stream_event",
+							event: { type: "content_block_delta", delta: { type: "text_delta", text: chunk } },
+						});
+					}
+					send({
+						type: "result",
+						is_error: false,
+						session_id: "harness-session",
+						duration_ms: 3700,
+						usage: { input_tokens: 120, cache_read_input_tokens: 10700, output_tokens: 173 },
+						result: answer,
+					});
+					listeners.get("close")?.(0);
+					console.info(`[agent] ${binary} ${resumed ? "resumed" : "fresh"}: ${question.slice(0, 60)}`);
+				}, 20);
+				return child;
+			}
 			const vault = await (await fetch("assets/vault.json")).json();
 			document.body.style.setProperty("--font-text-size", `${vault.fontSize}px`);
 
 			// The built bundle is CJS and externalises the node builtins Obsidian provides.
+			// spawn is the one that matters: a question has to be answerable here, or
+			// nothing downstream of it — the note it writes, the list it grows — is testable.
 			const modules = {
 				obsidian,
-				child_process: { spawn: () => { throw new Error("the harness does not spawn agents"); } },
+				child_process: { spawn: fakeAgent },
 				os: { homedir: () => "/harness" },
 				path: {},
 				fs: {},
@@ -93,29 +163,68 @@
 			);
 			const AskAiPlugin = module.exports.default;
 
-			// The real paths from the vault, so a remembered session is actually matched.
-			const data = await (await fetch("assets/data.json")).json().catch(() => ({ sessions: {} }));
-			const files = Object.keys(data.sessions ?? {});
-			if (!files.length) files.push("Ideas/A note.md");
+			// The real paths and settings from the vault, so the sidebar mounts against
+			// note names that exist and whatever is actually configured.
+			const data = await (await fetch("assets/data.json")).json().catch(() => ({}));
+			const notePaths = Object.keys(data.sessions ?? {});
+			if (notePaths.length < 2) notePaths.push("Ideas/A note.md", "Ideas/Another note.md");
+			const notes = {};
+			for (const path of notePaths) notes[path] = `# ${path.split("/").pop().replace(/\.md$/, "")}\n\nSome content.\n`;
 
-			// Seed a conversation, so reopening a note with history is what gets drawn.
-			const seeded = data.sessions?.[files[0]];
-			if (seeded) {
-				seeded.turns = [
-					{
-						question: "What does CUTOFF do?",
-						answer: "It is the per-mode similarity floor.\n\nSee [[LanceDB and motherduck research#Sources]].",
-						footer: "claude-opus-5 · 3.7s · 10.8k in · 173 out",
-						suggestions: ["Why is it per mode?", "What happens above it?"],
-					},
-				];
-				seeded.savedTurns = 0;
-			}
+			// One conversation already on disk, as a plugin that has been used would leave
+			// it: this is what the list renders from and what restore() reads back.
+			const seeded = `askai-conversations/${notePaths[0].split("/").pop().replace(/\.md$/, "")}/Vector index cutoff.md`;
+			notes[seeded] = [
+				"---",
+				"type: ask-ai-conversation",
+				`source: "[[${notePaths[0].split("/").pop().replace(/\.md$/, "")}]]"`,
+				"agent: claude",
+				"session: seeded-1",
+				"created: 2026-09-06T20:11",
+				"updated: 2026-09-06T20:14",
+				"follow_ups:",
+				'  - "Why is it per mode?"',
+				'  - "What happens above it?"',
+				"---",
+				"",
+				"## What does CUTOFF do?",
+				"",
+				"It is the per-mode similarity floor.",
+				"",
+				"### Sources",
+				"",
+				`- [[${notePaths[0].split("/").pop().replace(/\.md$/, "")}]]`,
+				"",
+				"*Answered by claude-opus-5 · 3.7s · 10.8k in · 173 out*",
+				"",
+			].join("\n");
 
-			const { app, leaf, open } = createApp({
+			// Conversations kept in the vault, which is the default for a new install; the
+			// copied data.json is from before that setting existed and has it off.
+			data.keepInVault = true;
+			delete data.autoSave;
+			// And one conversation still in the settings file, in the old shape, so the
+			// one-time move of those into the vault is exercised rather than assumed.
+			data.sessions = {
+				...(data.sessions ?? {}),
+				[notePaths[1]]: {
+					provider: "claude",
+					id: "legacy-1",
+					turns: [
+						{
+							question: "Which embedding model does this use?",
+							answer: "It uses the CLIP image encoder.",
+							footer: "claude-opus-5 · 2.1s",
+							suggestions: ["What are the vector dimensions?"],
+						},
+					],
+				},
+			};
+
+			const { app, leaf, open, dump } = createApp({
 				data,
-				files,
-				activePath: files[0],
+				notes,
+				activePath: notePaths[0],
 				leafContainer: document.getElementById("harness-leaf"),
 			});
 
@@ -131,27 +240,60 @@
 			await view.open();
 			if (!view.contentEl.childElementCount) throw new Error("the view opened but rendered nothing");
 
-			// Switching notes is the whole point of the per-note conversations, so the
-			// harness exercises it rather than only the first render.
+			// Only the open note's host is on screen, and only its open conversation: the
+			// rest are hidden by a parent, so a selector has to start from the parent.
+			const VISIBLE_NOTE = ".ask-ai-note-host:not(.ask-ai-hidden)";
+			const VISIBLE = `${VISIBLE_NOTE} .ask-ai-host:not(.ask-ai-hidden)`;
+
+			// Switching notes, asking a question, and starting a second conversation are
+			// the whole point of the per-note lists, so the harness can drive all three.
 			window.openNote = open;
-			window.notes = files;
+			window.visible = VISIBLE;
+			window.notes = notePaths;
+			window.dump = dump;
+			window.ask = async (question) => {
+				const input = view.contentEl.querySelector(VISIBLE + " .ask-ai-question-input");
+				input.value = question;
+				view.contentEl
+					.querySelector(VISIBLE + " .ask-ai-send")
+					.dispatchEvent(new MouseEvent("click"));
+				// Two frames: the run resolves in microtasks, the note is written after it.
+				await new Promise((resolve) => setTimeout(resolve, 60));
+				return window.conversations();
+			};
+			window.newConversation = () =>
+				view.contentEl.querySelector(".ask-ai-view-header button").dispatchEvent(new MouseEvent("click"));
+			window.conversations = () =>
+				[...view.contentEl.querySelectorAll(`${VISIBLE_NOTE} .ask-ai-list:not(.ask-ai-hidden) .ask-ai-list-row`)].map((row) => ({
+					title: row.querySelector(".ask-ai-list-title").textContent,
+					meta: row.querySelector(".ask-ai-list-meta").textContent,
+					active: row.classList.contains("is-active"),
+				}));
 
 			const content = view.contentEl;
-			const row = content.querySelector(".ask-ai-input-row");
-			window.measure = () => ({
-				theme: vault.theme,
-				rendered: content.childElementCount,
-				header: content.querySelector(".ask-ai-view-title")?.textContent,
-				noteFontSize: getComputedStyle(document.body).getPropertyValue("--font-text-size").trim(),
-				sidebarFontSize: getComputedStyle(content).fontSize,
-				viewPadding: getComputedStyle(content).padding,
-				gapUnderFooter: row
-					? Math.round(content.getBoundingClientRect().bottom - row.getBoundingClientRect().bottom)
-					: null,
-				statusBarHeight: document.querySelector(".status-bar").offsetHeight,
-				inputWidth: row ? Math.round(row.querySelector("textarea").getBoundingClientRect().width) : null,
-			});
-			if (!errorEl.textContent) document.title = JSON.stringify(window.measure());
+			// Looked up per call, not once: the first conversation mounts asynchronously
+			// now, because it is read from a file.
+			window.measure = () => {
+				const row = content.querySelector(VISIBLE + " .ask-ai-input-row");
+				return {
+					theme: vault.theme,
+					rendered: content.childElementCount,
+					header: content.querySelector(".ask-ai-view-title")?.textContent,
+					noteFontSize: getComputedStyle(document.body).getPropertyValue("--font-text-size").trim(),
+					sidebarFontSize: getComputedStyle(content).fontSize,
+					viewPadding: getComputedStyle(content).padding,
+					gapUnderFooter: row
+						? Math.round(content.getBoundingClientRect().bottom - row.getBoundingClientRect().bottom)
+						: null,
+					statusBarHeight: document.querySelector(".status-bar").offsetHeight,
+					inputWidth: row ? Math.round(row.querySelector("textarea").getBoundingClientRect().width) : null,
+					conversations: window.conversations().length,
+				};
+			};
+			// After the first conversation has been read off disk and mounted.
+			setTimeout(() => {
+				if (!errorEl.textContent) document.title = JSON.stringify(window.measure());
+			}, 50);
 		</script>
 	</body>
 </html>

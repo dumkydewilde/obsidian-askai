@@ -107,14 +107,20 @@ function clamp(text: string, max = 80): string {
  * Claude holds the system prompt as one, so an instruction about how to *end* an answer
  * still applies at the end. For the CLIs that only get it prepended to the first
  * question it is a page behind by then, and gone entirely on a resumed turn — Codex
- * dropped the follow-up block on every question tried. So it is repeated after the
- * question, and only while the prompt still asks for it, so deleting that paragraph
- * from settings still turns the suggestions off.
+ * dropped the follow-up block on every question tried. So the blocks are asked for
+ * again after the question, and only while the prompt still asks for them, so deleting
+ * either paragraph from settings still turns that block off.
  */
-function followUpReminder(context: RunContext): string {
-	return /```follow-ups/.test(context.systemPrompt)
-		? "\n\nEnd your answer with the ```follow-ups fenced block when there are useful next questions."
-		: "";
+function trailingReminder(context: RunContext): string {
+	const parts: string[] = [];
+	if (/```follow-ups/.test(context.systemPrompt)) {
+		parts.push("End your answer with the ```follow-ups fenced block when there are useful next questions.");
+	}
+	// Only on the turn that opens a conversation, which is the only turn it is wanted on.
+	if (!context.resumeSessionId && /```title/.test(context.systemPrompt)) {
+		parts.push("This is the first answer in this conversation, so end with the ```title block too.");
+	}
+	return parts.length ? `\n\n${parts.join(" ")}` : "";
 }
 
 /**
@@ -127,7 +133,7 @@ function followUpReminder(context: RunContext): string {
 function inlinePrompt(context: RunContext): string {
 	const instructions = context.systemPrompt.trim();
 	const body = instructions && !context.resumeSessionId ? `${instructions}\n\n---\n\n${context.prompt}` : context.prompt;
-	return body + followUpReminder(context);
+	return body + trailingReminder(context);
 }
 
 /** For CLIs whose web tools cannot be withheld by a flag. */
@@ -517,4 +523,9 @@ export const PROVIDER_LABELS: Record<string, string> = Object.fromEntries(
 
 export function providerOrDefault(id: string): Provider {
 	return PROVIDERS[id as ProviderId] ?? PROVIDERS.claude;
+}
+
+/** Whether a name off disk — a conversation note's frontmatter — is an agent we have. */
+export function isProviderId(id: string): id is ProviderId {
+	return id in PROVIDERS;
 }

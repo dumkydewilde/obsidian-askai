@@ -1,8 +1,8 @@
 import { App, Component, Modal, Setting, TFile } from "obsidian";
-import { Conversation, type AskOptions } from "./conversation";
+import { Conversation, type AskOptions, type ConversationRecord } from "./conversation";
 import type AskAiPlugin from "./main";
 import { PROVIDER_LABELS, providerOrDefault, type ProviderId } from "./providers";
-import { effortFor, modelOptionsFor, WEB_OPTIONS, type StoredSession } from "./settings";
+import { effortFor, modelOptionsFor, WEB_OPTIONS } from "./settings";
 
 /** Asks for the question text, and what to answer it with. */
 export class QuestionModal extends Modal {
@@ -113,9 +113,9 @@ export class AnswerModal extends Modal {
 	private component = new Component();
 	private conversation: Conversation;
 
-	constructor(app: App, plugin: AskAiPlugin, file: TFile, session: StoredSession | null, options: AskOptions) {
+	constructor(app: App, plugin: AskAiPlugin, file: TFile, record: ConversationRecord, options: AskOptions) {
 		super(app);
-		this.conversation = new Conversation(app, plugin, this.component, file, session, options);
+		this.conversation = new Conversation(app, plugin, this.component, file, record, options);
 	}
 
 	override onOpen(): void {

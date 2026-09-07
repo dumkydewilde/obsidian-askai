@@ -1,59 +1,9 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type AskAiPlugin from "./main";
 import { DEFAULT_SYSTEM_PROMPT } from "./prompt";
-import { PROVIDERS, PROVIDER_IDS, PROVIDER_LABELS, providerOrDefault, type ProviderId } from "./providers";
-import type { ResearchTurn } from "./research";
-
-/** One exchange, kept so reopening the note shows the conversation rather than a blank pane. */
-export interface StoredTurn extends ResearchTurn {
-	/** The line under the question: which model, how long, tokens in and out. */
-	footer?: string;
-	/** The next questions offered under this answer. Only the newest turn shows them. */
-	suggestions?: string[];
-}
-
-/** A note's conversation: the agent thread to resume, and what is on screen. */
-export interface StoredSession {
-	provider: ProviderId;
-	id: string;
-	turns?: StoredTurn[];
-	/** The research note this conversation has been saved to, so a later save appends. */
-	researchPath?: string;
-	/** How many turns are already in that note. */
-	savedTurns?: number;
-	/** Last asked about, which is the order conversations are forgotten in. */
-	updated?: number;
-}
-
-/**
- * Conversations are kept in the settings file, which is read whole at startup, so
- * they are bounded on both axes: how many notes remember one, and how much of a long
- * conversation is worth keeping. A research note is the durable home for an answer.
- */
-const MAX_REMEMBERED_NOTES = 20;
-const MAX_STORED_CHARACTERS = 60_000;
-
-/** Newest turns first out of the budget, because those are the ones being continued. */
-export function trimTurns(turns: StoredTurn[]): StoredTurn[] {
-	const kept: StoredTurn[] = [];
-	let budget = MAX_STORED_CHARACTERS;
-	for (let i = turns.length - 1; i >= 0; i--) {
-		budget -= turns[i].question.length + turns[i].answer.length;
-		if (budget < 0 && kept.length) break;
-		kept.unshift(turns[i]);
-	}
-	return kept;
-}
-
-/** Drop the conversations nobody has touched in longest. */
-export function forgetOldest(sessions: Record<string, StoredSession>): void {
-	const paths = Object.keys(sessions);
-	if (paths.length <= MAX_REMEMBERED_NOTES) return;
-	paths
-		.sort((a, b) => (sessions[b].updated ?? 0) - (sessions[a].updated ?? 0))
-		.slice(MAX_REMEMBERED_NOTES)
-		.forEach((path) => delete sessions[path]);
-}
+import { PROVIDER_LABELS, providerOrDefault, type ProviderId } from "./providers";
+import type { DocTurn } from "./document";
+import type { StoreOptions } from "./store";
 
 export interface AskAiSettings {
 	/** Which CLI answers a question, unless changed for that question. */
@@ -72,11 +22,15 @@ export interface AskAiSettings {
 	web: boolean;
 	/** Where a conversation opens. */
 	surface: "modal" | "sidebar";
-	/** Where saved research notes go. Empty means beside the note they are about. */
-	researchFolder: string;
-	/** Whether every answer is written to that note as it arrives, rather than on a button. */
-	autoSave: boolean;
-	/** Heading in the source note that research links are collected under. */
+	/** Whether conversations go in one folder, or beside the note they are about. */
+	conversationLocation: "folder" | "note";
+	/** That folder, when conversations go in one. */
+	conversationFolder: string;
+	/** A folder per note inside it, so a note's conversations are grouped rather than mixed. */
+	conversationSubfolder: boolean;
+	/** Whether every answer is written to its note as it arrives, rather than on a button. */
+	keepInVault: boolean;
+	/** Heading in the source note that conversation links are collected under. */
 	backlinkHeading: string;
 	/** How the agent is told to answer, on every question. */
 	systemPrompt: string;
@@ -88,8 +42,16 @@ export interface AskAiSettings {
 	installedPrompt: string;
 	/** How long one question may run before the process is killed. */
 	timeoutSeconds: number;
-	/** Session per vault-relative note path, so follow-ups continue the right conversation. */
-	sessions: Record<string, StoredSession>;
+}
+
+/** Where this vault keeps conversations, in the shape the store takes. */
+export function storeOptions(settings: AskAiSettings): StoreOptions {
+	return {
+		location: settings.conversationLocation,
+		folder: settings.conversationFolder,
+		subfolder: settings.conversationSubfolder,
+		backlinkHeading: settings.backlinkHeading,
+	};
 }
 
 /** Whether the web tools are offered to the agent. */
@@ -109,24 +71,37 @@ export const DEFAULT_SETTINGS: AskAiSettings = {
 	effort: "",
 	web: false,
 	surface: "modal",
-	researchFolder: "",
-	autoSave: false,
+	conversationLocation: "folder",
+	conversationFolder: "askai-conversations",
+	conversationSubfolder: true,
+	keepInVault: true,
 	backlinkHeading: "## Research",
 	systemPrompt: DEFAULT_SYSTEM_PROMPT,
 	installedPrompt: DEFAULT_SYSTEM_PROMPT,
 	timeoutSeconds: 180,
-	sessions: {},
 };
 
 /**
- * Settings written before the plugin handled more than one agent. Values keyed by
- * provider replaced the single `claudePath` and `model`, and a session is now a
- * provider and an id rather than a bare id.
+ * Settings written by earlier versions. Values keyed by provider replaced the single
+ * `claudePath` and `model`; conversations used to live in this file, under `sessions`,
+ * and are now notes in the vault.
  */
 interface LegacySettings {
 	claudePath?: string;
 	model?: string;
-	sessions?: Record<string, string | StoredSession>;
+	researchFolder?: string;
+	autoSave?: boolean;
+	sessions?: Record<string, string | LegacySession>;
+}
+
+/** A conversation as the settings file used to hold it. Read once, then written out as a note. */
+export interface LegacySession {
+	provider: ProviderId;
+	id: string;
+	turns?: (DocTurn & { agent?: string; suggestions?: string[] })[];
+	researchPath?: string;
+	savedTurns?: number;
+	updated?: number;
 }
 
 export function migrate(saved: Partial<AskAiSettings> & LegacySettings): AskAiSettings {
@@ -135,21 +110,35 @@ export function migrate(saved: Partial<AskAiSettings> & LegacySettings): AskAiSe
 		...saved,
 		paths: { ...EMPTY_PATHS, ...saved.paths },
 		models: { ...EMPTY_PATHS, ...saved.models },
-		sessions: {},
 	};
 
 	if (saved.claudePath && !settings.paths.claude) settings.paths.claude = saved.claudePath;
 	if (saved.model && !settings.models.claude) settings.models.claude = saved.model;
+	// The research folder was one setting doing two jobs: empty meant "beside the note".
+	if (saved.researchFolder !== undefined) {
+		settings.conversationLocation = saved.researchFolder.trim() ? "folder" : "note";
+		settings.conversationFolder = saved.researchFolder.trim() || DEFAULT_SETTINGS.conversationFolder;
+	}
+	// `autoSave` is deliberately not carried over: it used to mean "write the research
+	// note as well", with the settings file keeping the conversation either way, and that
+	// second store is gone — so off would now mean "keep this nowhere".
+	//
 	// The spread above carried the old keys through; they are saved back otherwise.
-	delete (settings as Partial<LegacySettings>).claudePath;
-	delete (settings as Partial<LegacySettings>).model;
-
-	for (const [path, session] of Object.entries(saved.sessions ?? {})) {
-		if (typeof session === "string") settings.sessions[path] = { provider: "claude", id: session };
-		else if (session?.id) settings.sessions[path] = session;
+	for (const key of ["claudePath", "model", "researchFolder", "autoSave", "sessions"] as const) {
+		delete (settings as Partial<LegacySettings>)[key];
 	}
 
 	return settings;
+}
+
+/** The conversations an older settings file is still holding, so they can become notes. */
+export function legacySessions(saved: LegacySettings): Record<string, LegacySession> {
+	const sessions: Record<string, LegacySession> = {};
+	for (const [path, session] of Object.entries(saved.sessions ?? {})) {
+		if (typeof session === "string") sessions[path] = { provider: "claude", id: session };
+		else if (session?.id) sessions[path] = session;
+	}
+	return sessions;
 }
 
 /**
@@ -313,35 +302,70 @@ export class AskAiSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Research folder")
-			.setDesc("Where saved answers go. Leave empty to put them beside the note they are about.")
-			.addText((text) =>
-				text
-					.setPlaceholder("(beside the note)")
-					.setValue(settings.researchFolder)
-					.onChange(async (value) => {
-						settings.researchFolder = value.trim();
-						await this.plugin.saveSettings();
-					}),
+			.setName("Keep conversations in the vault")
+			.setDesc(
+				"Write each answer to its own note as it arrives, instead of waiting for the save button. " +
+					"Conversations are then ordinary notes: searchable, editable, in the graph, and pickable " +
+					"by a Base through their `type: ask-ai-conversation` property. Off, a conversation only " +
+					"lasts as long as the window unless you save it.",
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(settings.keepInVault).onChange(async (value) => {
+					settings.keepInVault = value;
+					await this.plugin.saveSettings();
+				}),
 			);
 
 		new Setting(containerEl)
-			.setName("Keep conversations in the vault")
+			.setName("Conversation location")
+			.setDesc("Where a conversation note is created, in the same terms as Obsidian's attachments.")
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOptions({
+						folder: "In the folder specified below",
+						note: "Same folder as current note",
+					})
+					.setValue(settings.conversationLocation)
+					.onChange(async (value) => {
+						settings.conversationLocation = value === "note" ? "note" : "folder";
+						await this.plugin.saveSettings();
+						// The folder setting below only applies to one of the two.
+						this.display();
+					}),
+			);
+
+		if (settings.conversationLocation === "folder") {
+			new Setting(containerEl)
+				.setName("Conversation folder")
+				.setDesc("Created on the first answer if it is not there yet.")
+				.addText((text) =>
+					text
+						.setPlaceholder(DEFAULT_SETTINGS.conversationFolder)
+						.setValue(settings.conversationFolder)
+						.onChange(async (value) => {
+							settings.conversationFolder = value.trim() || DEFAULT_SETTINGS.conversationFolder;
+							await this.plugin.saveSettings();
+						}),
+				);
+		}
+
+		new Setting(containerEl)
+			.setName("A folder per note")
 			.setDesc(
-				"Write each answer to its research note as it arrives, instead of waiting for the save " +
-					"button. Conversations become ordinary notes: searchable, linkable, and pickable by a " +
-					"Base through their `type: ask-ai-conversation` property.",
+				"Group a note's conversations in a subfolder named after it, so five conversations about " +
+					"one note are one folder rather than five files. Off, they sit side by side, named " +
+					"\u201cNote \u2014 Title\u201d.",
 			)
 			.addToggle((toggle) =>
-				toggle.setValue(settings.autoSave).onChange(async (value) => {
-					settings.autoSave = value;
+				toggle.setValue(settings.conversationSubfolder).onChange(async (value) => {
+					settings.conversationSubfolder = value;
 					await this.plugin.saveSettings();
 				}),
 			);
 
 		new Setting(containerEl)
 			.setName("Research heading")
-			.setDesc("Heading in the source note that links to saved answers are collected under.")
+			.setDesc("Heading in the source note that links to its conversations are collected under.")
 			.addText((text) =>
 				text
 					.setPlaceholder("## Research")
@@ -382,30 +406,5 @@ export class AskAiSettingTab extends PluginSettingTab {
 				text.inputEl.addClass("ask-ai-settings-textarea");
 			});
 
-		const counts = new Map<ProviderId, number>();
-		for (const session of Object.values(settings.sessions)) {
-			counts.set(session.provider, (counts.get(session.provider) ?? 0) + 1);
-		}
-		const total = Object.keys(settings.sessions).length;
-		const breakdown = PROVIDER_IDS.filter((id) => counts.has(id))
-			.map((id) => `${counts.get(id)} ${PROVIDERS[id].label}`)
-			.join(", ");
-		new Setting(containerEl)
-			.setName("Conversations")
-			.setDesc(
-				total === 0
-					? "No note has an open conversation yet."
-					: `${total} ${total === 1 ? "note has" : "notes have"} an open conversation that follow-ups continue (${breakdown}).`,
-			)
-			.addButton((button) =>
-				button
-					.setButtonText("Forget all")
-					.setDisabled(total === 0)
-					.onClick(async () => {
-						settings.sessions = {};
-						await this.plugin.saveSettings();
-						this.display();
-					}),
-			);
 	}
 }

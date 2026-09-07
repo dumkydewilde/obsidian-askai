@@ -82,13 +82,78 @@
 	padding-bottom: calc(var(--ask-ai-bottom-clearance, var(--size-4-6)) + var(--size-4-2));
 }
 
-/* One per note. All but the open note's are hidden rather than unmounted, so coming
-   back to a note finds its conversation, and its scroll position, where you left it. */
+/* One per note, and inside it one per conversation. All but the open one are hidden
+   rather than unmounted, so coming back finds the answers, and the scroll position,
+   where they were left. */
+.ask-ai-note-host,
+.ask-ai-stack,
 .ask-ai-host {
 	flex: 1;
 	min-height: 0;
 	display: flex;
 	flex-direction: column;
+}
+
+/* The note's other conversations, one collapsed line each. Hidden when there is only
+   one, because a list of one says nothing. */
+.ask-ai-list {
+	flex-shrink: 0;
+	max-height: 30%;
+	overflow-y: auto;
+	margin: var(--size-4-2) var(--size-4-3) 0;
+	font-size: var(--font-ui-small);
+}
+
+.ask-ai-list-row {
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-2);
+	padding: var(--size-2-2) var(--size-2-2);
+	border-radius: var(--radius-s);
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.ask-ai-list-row:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.ask-ai-list-row.is-active {
+	color: var(--text-normal);
+	font-weight: var(--font-semibold);
+}
+
+.ask-ai-list-icon {
+	display: flex;
+	flex-shrink: 0;
+	color: var(--text-faint);
+}
+
+.ask-ai-list-icon .svg-icon {
+	width: var(--icon-xs);
+	height: var(--icon-xs);
+}
+
+.ask-ai-list-title {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ask-ai-list-meta {
+	flex-shrink: 0;
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
+}
+
+/* Whatever was written into the conversation note above the first question. */
+.ask-ai-preamble {
+	margin-bottom: var(--size-4-3);
+	padding-left: var(--size-4-2);
+	border-left: 2px solid var(--background-modifier-border);
+	color: var(--text-muted);
 }
 
 .ask-ai-placeholder,

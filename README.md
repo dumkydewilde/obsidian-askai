@@ -16,15 +16,33 @@ own context file applies and `[[wikilinks]]` resolve.
   the question in the conversation and in the saved note, so "what does this do?"
   still makes sense a week later.
 - **Follow up** in the same conversation, from the box under the answer or from
-  the right-click menu later. One conversation per note, remembered across
-  restarts, resumed by the agent that started it.
-- **A conversation per note in the sidebar.** It follows whichever note is open:
-  switch notes and the sidebar switches with you, back to that note's questions
-  and answers and its scroll position, still streaming if it was streaming. They
-  survive a restart too — the twenty most recently asked-about notes keep their
-  conversation, so a note you asked about last week opens on what it said rather
-  than on a blank pane that a follow-up would silently continue. The icon in the
-  header starts that note over.
+  the right-click menu later. Resumed by the agent that started it.
+- **Conversations are notes in your vault.** Each one is a file with the
+  questions as `## headings`, linked from the note it is about and carrying
+  `type: ask-ai-conversation` in its frontmatter. That file is the record, not an
+  export of one: the sidebar reads it back, so a conversation survives a restart,
+  is searchable, shows up in the graph, can be listed by a Base, and moves or
+  goes away when you move or delete it. Edit an answer and the sidebar shows
+  what you wrote.
+- **As many conversations per note as you want.** The sidebar lists a note's
+  conversations one collapsed line each — title, when it was last asked in, how
+  many questions — and the open one below them. Click a line to continue that
+  one; the `+` in the header starts another, so two lines of enquiry about one
+  note stay two threads instead of becoming one long one.
+- **Named by the agent.** It ends its first answer with a short title for the
+  conversation, and that title is the filename. A first question makes a poor
+  name for a thread ("In one sentence, what is this note about?").
+- **Where they go is a setting**, in the same terms as Obsidian's attachments: a
+  folder you name (`askai-conversations` by default) or beside the note itself,
+  and a folder per note or all of them side by side. Later answers are appended
+  to the same file, and once there are two questions it grows a `## Contents`
+  list of heading links.
+- **Keep conversations in the vault** is on by default. Turned off, a
+  conversation is only in the pane until you press save, and gone when the window
+  closes.
+- **The sidebar follows whichever note is open:** switch notes and it switches
+  with you, back to that note's conversations and the scroll position you left
+  them at, still streaming if one was streaming.
 - **Suggested follow-ups.** The agent ends an answer with up to three next
   questions when there are useful ones, and they turn into buttons under the
   answer. Answers are short by default because of it: the detail is a click away
@@ -34,14 +52,6 @@ own context file applies and `[[wikilinks]]` resolve.
   question: in the question box, and behind the cog in the conversation footer.
   Each choice sticks as the default for the next one. The controls redraw for
   the agent you pick, because one CLI's model names mean nothing to another.
-- **Save to new note** turns a conversation into a research note beside the note
-  it is about, linked from it under a `## Research` heading. One button for the
-  whole conversation: later answers are appended to that same note, and once
-  there are two questions it grows a `## Contents` list of heading links.
-- **Keep conversations in the vault**, off by default, does that on every answer
-  instead of on a button. Conversations then are notes — searchable, linkable,
-  in the graph — and each carries a `type: ask-ai-conversation` property, so a
-  Base can list them as a table without needing a folder query.
 - **A sidebar or a modal**, whichever you set. The sidebar stays open beside the
   note; the modal covers it and closes on Escape.
 - Answers render as markdown *while* they stream, with a copy button in the
@@ -75,6 +85,13 @@ fresh install rather than an update. Disable the old one and delete
 open conversations, copy its `data.json` into
 `.obsidian/plugins/ask-ai/` before enabling — the old `claudePath` and `model`
 become Claude Code's, and every remembered session is tagged as Claude Code's.
+
+Upgrading from a version that kept conversations in `data.json`: they are moved
+into the vault as notes the first time the new build loads, into whatever your
+`Research folder` was, and `data.json` stops holding transcripts. The old
+`Keep conversations in the vault` toggle is not carried over — it used to mean
+"write the research note as well", with the settings file keeping the
+conversation either way, and that second store is gone.
 
 BRAT is not an option from here. It reads `manifest.json` from a repository root
 and downloads `main.js` from a matching release, and this is a monorepo with the
@@ -188,11 +205,13 @@ Arguments  run {prompt}
 | Thinking effort | empty | Pin an effort level. Hidden for agents that have none |
 | Search the web | off | Let answers cite sources outside the vault |
 | Open answers in | Modal | Keep the conversation beside the note instead of over it |
-| Research folder | empty | Collect saved answers in one folder instead of beside each note |
+| Keep conversations in the vault | on | Off, a conversation is not written unless you press save |
+| Conversation location | In the folder specified below | Keep conversations beside the note they are about |
+| Conversation folder | `askai-conversations` | Somewhere else, or your existing research folder |
+| A folder per note | on | Off, they sit side by side as `Note — Title.md` |
 | Research heading | `## Research` | Match your own note conventions |
 | Timeout | 180s | Long questions over a large vault |
 | System prompt | see below | Change how answers are written |
-| Conversations | — | "Forget all" drops every remembered session |
 
 ### Model names
 
@@ -208,19 +227,21 @@ the dropdown. Whichever ran is printed in the footer under each answer.
 The prompt tells the agent to answer as a researcher: lead with the answer, use
 its own knowledge of the subject rather than treating the vault as the limit of
 what is knowable, cite vault notes and URLs, put method in a Sources section at
-the end instead of opening with what it searched for, keep it short, and offer up
+the end instead of opening with what it searched for, keep it short, offer up
 to three follow-up questions in a fenced `follow-ups` block when there are useful
-ones. The plugin lifts that block out of the answer and turns it into buttons.
+ones, and name the conversation in a `title` block on its first answer. The
+plugin lifts both blocks out of the answer, and turns them into buttons and into
+the conversation's filename.
 
 It is a setting, so it is saved in your vault. The settings file also records the
 default it was given, so an unedited prompt is replaced when the default improves
 and an edited one is left alone — without the plugin having to carry a copy of
 every prompt it has ever shipped. Claude
 Code takes it as a real system prompt; the others have no flag for one, so it
-goes in ahead of the question — and for those, the one line about the follow-up
-block is repeated after the question, because by the time they reach the end of
+goes in ahead of the question — and for those, the lines about the two trailing
+blocks are repeated after the question, because by the time they reach the end of
 the answer the prompt is a page behind them, and on a resumed turn it is not
-sent at all. Delete that paragraph from the prompt and the reminder stops too.
+sent at all. Delete a paragraph from the prompt and its reminder stops too.
 
 ## Vault context file
 
@@ -242,20 +263,22 @@ Each agent reads its own file from the vault root: `CLAUDE.md`, `AGENTS.md`,
 ```bash
 npm run dev              # rebuild on change; reload the vault window to pick it up
 npm run build            # typecheck, then bundle main.js
-npm run check            # the follow-up parser; free and instant
+npm run check            # the trailing-block parser and the note format; free and instant
 npm run smoke            # end-to-end against every agent on PATH, costs a few cents
 npm run smoke -- codex   # just one
 ```
 
 `npm run smoke` covers everything outside Obsidian's UI: spawning the CLI,
 parsing its output, resuming a session, the read-only confinement, whether the
-agent actually emits the follow-up block the prompt asks for, a missing binary,
-and cancelling a run. It runs every agent whose binary it can find, so it is also
+agent actually emits the follow-up and title blocks the prompt asks for, a
+missing binary, and cancelling a run. It runs every agent whose binary it can find, so it is also
 how you check an agent this repository has not been able to test.
 
 For the UI, `harness/` loads the real built `main.js` against a stubbed Obsidian
 API and mounts the real sidebar view, inside Obsidian's own `app.css` and your
-vault's theme — both extracted from the installed app:
+vault's theme — both extracted from the installed app. Its vault is a map of
+paths to strings and its agent is a script emitting Claude's `stream-json`, so a
+question can be asked and the note it writes read back, in a browser:
 
 ```bash
 npm run build && node harness/prepare.mjs
@@ -266,8 +289,19 @@ open http://127.0.0.1:8901/harness/index.html
 A throw in `onOpen` shows up in the page with a stack. `document.title` holds the
 measurements that are hard to eyeball — the padding that actually won, the
 sidebar font size against the note's, whether the footer clears the status bar.
-`window.openNote(window.notes[1])` switches notes, which is how the per-note
-conversations get exercised.
+
+```js
+await window.ask("What happens above the cutoff?")   // runs a whole turn
+window.dump()                                        // every file, as written
+window.conversations()                               // the list, as rendered
+window.newConversation(); window.openNote(window.notes[1])
+```
+
+That is how the round trip is checked: ask, read the file the plugin wrote, ask
+again and see it appended, start a second conversation and watch the list grow.
+A conversation already on disk is seeded before the plugin loads, so restoring
+one is exercised as well as writing one — as is the one-time move of
+conversations out of an old `data.json`.
 
 It is a stub, not a simulator: anything the plugin reaches for that
 `harness/obsidian-stub.js` does not define throws with its own name. That also
@@ -311,14 +345,36 @@ done; the debug port is unauthenticated.
 - The editor buffer is flushed to disk before each question. The agent reads the
   note off disk, so without that a question asked seconds after typing would be
   answered against the previous text.
-- The sidebar keeps a conversation per note, hidden rather than unmounted, so a
-  note you come back to still has its answers and its scroll position. Ones you
-  never asked anything in are dropped past eight open, since rebuilding an empty
-  one costs nothing.
-- Conversations persist in the settings file, which is read whole at startup, so
-  they are bounded on both axes: the twenty most recently asked-about notes, and
-  60k characters of turns each, newest kept. A research note is the durable home
-  for an answer; this is only so a pane is never blank when its thread is not.
+- The sidebar keeps a host per note and a pane per conversation, hidden rather
+  than unmounted, so a note you come back to still has its answers and its
+  scroll position. Notes you never asked anything about are dropped past eight
+  open, since rebuilding an empty one costs nothing.
+- A note's conversations are found by frontmatter, not by folder: the walk is
+  over Obsidian's in-memory metadata cache, filtering on
+  `type: ask-ai-conversation` and resolving each one's `source` link. So moving a
+  conversation, renaming it, or renaming the note it is about does not lose it,
+  and nothing has to be kept in sync. The list of them is drawn from that cache
+  too — the `##` headings Obsidian already parsed are the question count — so a
+  file is only read when you open it.
+- New answers are appended to the file rather than rewriting it, and only the
+  frontmatter keys the plugin owns are rewritten. An answer you have edited
+  stays as you edited it, and a `tags:` you added stays where you put it.
+- Reading a conversation back is deliberately forgiving. A heading with no answer
+  under it is still a question, prose above the first question is kept and shown,
+  a `##` inside a code fence is not mistaken for a question, and an answer's own
+  headings drop a level going in and come back up coming out. `npm run check`
+  covers all of it, including a file edited by hand.
+- The conversation note is the only record. There is no second copy in
+  `data.json`, which is what the 20-note and 60k-character caps in the previous
+  version were working around.
+- The agent's own thread is separate from the file. It resumes from a session id
+  in the frontmatter, so editing an answer changes what the sidebar shows but not
+  what the agent remembers. The conversation is a note in the vault, though, so
+  asking it to read that note is enough when you want it to see your edits.
+- Conversations left in an older `data.json` are written out as notes once, on
+  the first load of a new build, and linked from the notes they are about. That
+  is a write into your vault on load; the alternative was dropping transcripts
+  the previous version had promised to keep.
 - Copying one block hands back that block's markdown, matched to the rendered
   element by walking both in order and resyncing when they disagree — a list
   split by blank lines is several source blocks and one element. When they stop
@@ -330,9 +386,11 @@ done; the debug port is unauthenticated.
 - `.view-content.ask-ai-view` is deliberately two class names.
   `.workspace-leaf-content .view-content` in Obsidian's own stylesheet sets the
   padding, and a single class loses to it.
-- The suggested follow-ups are stripped from the answer as it streams, not only
-  at the end, so a half-written fence never flashes up as an empty code block.
-  `npm run check` covers that parser without spending agent tokens.
+- The trailing blocks are stripped from the answer as it streams, not only at the
+  end, so a half-written fence never flashes up as an empty code block. Only
+  prefixes of `follow-ups` and `title` are stripped, so a half-typed ```sql fence
+  is left where it is. `npm run check` covers that parser without spending agent
+  tokens.
 - Claude's token counts add `input_tokens`, `cache_read_input_tokens` and
   `cache_creation_input_tokens` together, because on a large note almost
   everything arrives as a cache read. Codex's `input_tokens` is already the whole

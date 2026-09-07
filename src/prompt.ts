@@ -36,6 +36,15 @@ export const DEFAULT_SYSTEM_PROMPT = [
 	"What breaks if the embeddings are regenerated with a different model?",
 	"```",
 	"",
+	"On the first answer of a conversation only, end with a second fenced block tagged title holding a " +
+		"name for the conversation: three to six words naming its subject, in title case, no question mark " +
+		"and no trailing period. It becomes the filename of the note the conversation is kept in, so make it " +
+		"read as a heading rather than as a question. Leave the block out on every later answer.",
+	"",
+	"```title",
+	"Hybrid execution split",
+	"```",
+	"",
 	"Read the note before answering, and follow [[wikilinks]] with Grep or Glob when they matter. Write " +
 		"plain markdown. No preamble, no restating the question, no \"that said\". Be specific.",
 ].join("\n");
