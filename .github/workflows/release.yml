@@ -1,0 +1,44 @@
+# Cut a release from a tag, with the three files Obsidian installs. BRAT and the
+# community plugin list both read the release assets, not the repository, so
+# main.js has to be attached here — it is gitignored on purpose.
+#
+#   npm version minor && git push --follow-tags
+name: Release
+
+on:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      # Typechecks first, so a tag can never ship a build that does not compile.
+      - run: npm run build
+      - run: npm run check
+      # The tag has to match what Obsidian will read out of the manifest, or the
+      # plugin installs and then refuses to update.
+      - name: Check the tag matches manifest.json
+        run: |
+          manifest=$(node -p "require('./manifest.json').version")
+          if [ "$manifest" != "${GITHUB_REF_NAME#v}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match manifest version ${manifest}"
+            exit 1
+          fi
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            main.js
+            manifest.json
+            styles.css
+          generate_release_notes: true

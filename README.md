@@ -1,12 +1,19 @@
-# ask-ai
+# Ask AI for Obsidian
 
 An Obsidian plugin. Right-click inside a note, ask a coding-agent CLI a question
 about it, and read the answer in a sidebar or a modal without leaving the app.
+Conversations are kept as notes in your vault, so they are searchable, linkable
+and yours.
 
-Claude Code, Codex and Gemini CLI ship with the plugin. Anything else with a
-non-interactive mode — opencode, crush, a shell script — goes in as a custom
-command. Whichever you pick runs with the vault as its working directory, so its
-own context file applies and `[[wikilinks]]` resolve.
+**You bring the agent.** The plugin spawns a CLI you already have installed and
+signed in: adapters for Claude Code, Codex and Gemini CLI are built in, and
+anything else with a non-interactive mode — opencode, crush, a shell script —
+goes in as a custom command. There is no API key to paste and nothing is sent
+anywhere the CLI would not send it; questions cost whatever your agent
+subscription or API usage costs. Whichever you pick runs with the vault as its
+working directory, so its own context file applies and `[[wikilinks]]` resolve.
+
+Desktop only — it spawns a process, which Obsidian mobile cannot do.
 
 ## What you get
 
@@ -66,36 +73,32 @@ own context file applies and `[[wikilinks]]` resolve.
 
 ## Install
 
+Not in the community plugin list yet, so either of these:
+
+**With [BRAT](https://github.com/TfTHacker/obsidian42-brat).** Add
+`dumkydewilde/obsidian-askai` as a beta plugin. BRAT reads the latest release
+and keeps it updated.
+
+**By hand.** Download `main.js`, `manifest.json` and `styles.css` from the
+[latest release](https://github.com/dumkydewilde/obsidian-askai/releases/latest)
+into `<your vault>/.obsidian/plugins/ask-ai/`.
+
+Then enable **Ask AI** under Settings → Community plugins, and set the command
+for your agent if it is not on the PATH Obsidian inherits — which, launched from
+Finder, is almost none of your shell's. That one setting is the usual reason a
+fresh install cannot find `claude` or `codex`.
+
+**From source**, which is also how you develop against it:
+
 ```bash
-cd ask-ai
 npm install
 npm run build
 npm run install-local -- "/path/to/your/vault"
 ```
 
-Then enable **Ask AI** under Settings, Community plugins. After a later
-`npm run build`, rerun `install-local` and reload the vault window (Cmd+R).
-
-The reload is not optional: a new `main.js` under a running Obsidian is only
-picked up on Cmd+R.
-
-Upgrading from `obsidian-ask`: this installs under a new plugin id, so it is a
-fresh install rather than an update. Disable the old one and delete
-`.obsidian/plugins/obsidian-ask` once you are happy. To keep your settings and
-open conversations, copy its `data.json` into
-`.obsidian/plugins/ask-ai/` before enabling — the old `claudePath` and `model`
-become Claude Code's, and every remembered session is tagged as Claude Code's.
-
-Upgrading from a version that kept conversations in `data.json`: they are moved
-into the vault as notes the first time the new build loads, into whatever your
-`Research folder` was, and `data.json` stops holding transcripts. The old
-`Keep conversations in the vault` toggle is not carried over — it used to mean
-"write the research note as well", with the settings file keeping the
-conversation either way, and that second store is gone.
-
-BRAT is not an option from here. It reads `manifest.json` from a repository root
-and downloads `main.js` from a matching release, and this is a monorepo with the
-plugin in a subfolder.
+After a later `npm run build`, rerun `install-local` and reload the vault window
+(Cmd+R). The reload is not optional: a new `main.js` under a running Obsidian is
+only picked up on Cmd+R.
 
 ## Agents
 
@@ -402,3 +405,19 @@ done; the debug port is unauthenticated.
   everything arrives as a cache read. Codex's `input_tokens` is already the whole
   prompt, so it is used as it comes.
 - Desktop only. It spawns a process, which Obsidian mobile cannot do.
+
+## Contributing
+
+Issues and pull requests are welcome. Two things worth knowing before you open
+one:
+
+- `npm run check` is free and instant and covers the parsers. `npm run smoke`
+  spends a few cents of agent usage per agent and is how an adapter gets
+  verified — if you add one, run it and paste the output.
+- The Gemini CLI adapter is written to its documented headless contract and has
+  never been run against a live `gemini` binary. `npm run smoke -- gemini` will
+  tell you, and that report is the single most useful thing anyone could send.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).

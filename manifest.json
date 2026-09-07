@@ -5,6 +5,6 @@
   "minAppVersion": "1.5.0",
   "description": "Ask a coding-agent CLI — Claude Code, Codex, Gemini, or your own — a question about the note you are reading, from the right-click menu.",
   "author": "Dumky de Wilde",
-  "authorUrl": "https://github.com/dumkydewilde/tools",
+  "authorUrl": "https://github.com/dumkydewilde/obsidian-askai",
   "isDesktopOnly": true
 }

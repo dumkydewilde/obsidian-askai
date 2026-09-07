@@ -95,9 +95,9 @@ check(
 
 check(
 	"a paragraph keeps its wikilink",
-	alignBlocks(["The index is in LanceDB and motherduck research.", "Second one."],
-		"The index is in [[LanceDB and motherduck research#Sources]].\n\nSecond one."),
-	["The index is in [[LanceDB and motherduck research#Sources]].", "Second one."],
+	alignBlocks(["The index is in Lance notes.", "Second one."],
+		"The index is in [[Lance notes#Sources]].\n\nSecond one."),
+	["The index is in [[Lance notes#Sources]].", "Second one."],
 );
 
 check(
@@ -135,9 +135,9 @@ check("streaming, title tag half typed", stripTrailing(`${answer}\n\n\`\`\`tit`)
 check("streaming, title block open", stripTrailing(`${answer}\n\n\`\`\`title\nVector`), answer);
 
 // A title becomes a filename, and — with a folder per note — a note's name becomes a
-// folder name. "using lancedb with motherduck?" is a legal note name and an illegal
+// folder name. "a note with a question mark?" is a legal note name and an illegal
 // folder name, which is what put this through safeName as well.
-check("a question mark is dropped", safeName("using lancedb with motherduck?"), "using lancedb with motherduck");
+check("a question mark is dropped", safeName("a note with a question mark?"), "a note with a question mark");
 check("so are the characters Obsidian rejects", safeName('a/b\\c:d*e?f"g<h>i|j#k^l[m]n'), "abcdefghijklmn");
 check("a trailing period would double up with the one before md", safeName("Version 1."), "Version 1");
 check("a long title is capped", safeName("x".repeat(80)).length, 61);
@@ -145,7 +145,7 @@ check("nothing left is still a name", safeName("###"), "conversation");
 
 // A conversation is a note you can edit, so the format has to survive the round trip.
 const fields = {
-	source: '[[LanceDB and motherduck research]]',
+	source: '[[Lance notes]]',
 	agent: "claude",
 	session: "9c0f-1",
 	created: "2026-09-07T10:04",

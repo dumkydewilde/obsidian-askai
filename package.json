@@ -1,7 +1,7 @@
 {
   "name": "ask-ai",
   "version": "2.0.0",
-  "description": "Ask a coding-agent CLI about the current Obsidian note",
+  "description": "Ask a coding-agent CLI about the note you are reading, in Obsidian",
   "private": true,
   "scripts": {
     "dev": "node esbuild.config.mjs",
@@ -15,5 +15,11 @@
     "esbuild": "^0.24.2",
     "obsidian": "^1.7.2",
     "typescript": "^5.7.2"
+  },
+  "license": "MIT",
+  "author": "Dumky de Wilde",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dumkydewilde/obsidian-askai.git"
   }
 }
