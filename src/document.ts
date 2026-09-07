@@ -252,6 +252,18 @@ export function oneLine(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * A title as a file or folder name. Obsidian rejects these characters, long names are
+ * unreadable in the explorer, and a trailing period would land next to the one before
+ * "md". Folders go through it too: a note called "using lancedb with motherduck?" is a
+ * legal note name and an illegal folder name, and the folder is named after the note.
+ */
+export function safeName(title: string): string {
+	const cleaned = oneLine(title.replace(/[/\\:*?"<>|#^[\]]/g, ""));
+	const capped = cleaned.length > 60 ? `${cleaned.slice(0, 60).trimEnd()}…` : cleaned;
+	return capped.replace(/[.\s]+$/, "") || "conversation";
+}
+
 /* ---------------- reading ---------------- */
 
 function splitFrontmatter(content: string): { lines: string[]; body: string } {

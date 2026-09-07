@@ -2,11 +2,11 @@ import { App, Component, MarkdownRenderer, Notice, TFile, setIcon, setTooltip } 
 import { PROVIDER_LABELS, providerOrDefault, type ProviderId } from "./providers";
 import { runAgent, type AskResult } from "./runner";
 import type AskAiPlugin from "./main";
-import { appendConversation, createConversation, localTimestamp, safeName } from "./store";
+import { appendConversation, createConversation, localTimestamp } from "./store";
 import { alignBlocks } from "./markdown";
 import { splitTrailing, stripTrailing } from "./trailing";
 import { effortFor, modelOptionsFor, storeOptions, WEB_OPTIONS } from "./settings";
-import { oneLine, type DocTurn } from "./document";
+import { oneLine, safeName, type DocTurn } from "./document";
 
 /** What to run a question with, chosen per question rather than only in settings. */
 export interface AskOptions {

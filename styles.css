@@ -101,6 +101,10 @@
 	max-height: 30%;
 	overflow-y: auto;
 	margin: var(--size-4-2) var(--size-4-3) 0;
+	/* A rule, because the answers scroll underneath it: without one the line clipped at
+	   the top of the scroll reads as part of the list. */
+	padding-bottom: var(--size-2-2);
+	border-bottom: 1px solid var(--background-modifier-border);
 	font-size: var(--font-ui-small);
 }
 

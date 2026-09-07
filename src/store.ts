@@ -5,6 +5,7 @@ import {
 	isConversation,
 	oneLine,
 	parseConversation,
+	safeName,
 	setFields,
 	type DocFields,
 	type DocTurn,
@@ -61,18 +62,22 @@ export async function readConversation(app: App, file: TFile): Promise<ParsedCon
  * its own; flat, the note comes first so a folder of conversations sorts by note.
  */
 export function conversationName(options: StoreOptions, source: TFile, title: string): string {
-	return options.subfolder ? title : `${source.basename} — ${title}`;
+	const name = safeName(title);
+	return options.subfolder ? name : `${safeName(source.basename)} — ${name}`;
 }
 
 /** And back, so a renamed file still reads as a title in the list. */
 export function titleOf(file: TFile, source: TFile): string {
-	const prefix = `${source.basename} — `;
+	// Against the sanitised name, because that is the one the filename carries.
+	const prefix = `${safeName(source.basename)} — `;
 	return file.basename.startsWith(prefix) ? file.basename.slice(prefix.length) : file.basename;
 }
 
 export function folderFor(options: StoreOptions, source: TFile): string {
 	const base = options.location === "folder" ? options.folder.trim() : source.parent?.path ?? "";
-	const parts = [base, options.subfolder ? source.basename : ""].filter(Boolean);
+	// Through safeName: a note called "using lancedb with motherduck?" is a legal note
+	// name and an illegal folder name, and the folder is named after the note.
+	const parts = [base, options.subfolder ? safeName(source.basename) : ""].filter(Boolean);
 	return parts.length ? normalizePath(parts.join("/")) : "";
 }
 
@@ -87,7 +92,7 @@ export async function createConversation(
 ): Promise<TFile> {
 	const folder = folderFor(options, source);
 	await ensureFolder(app, folder);
-	const path = await uniquePath(app, folder, safeName(conversationName(options, source, title)));
+	const path = await uniquePath(app, folder, conversationName(options, source, title));
 	const link = app.fileManager.generateMarkdownLink(source, folder);
 	const note = await app.vault.create(path, formatConversation({ ...fields, source: link }, turns));
 	await addBacklink(app, source, note, title, options.backlinkHeading);
@@ -154,16 +159,6 @@ async function addBacklink(app: App, source: TFile, note: TFile, title: string, 
 		lines.splice(end, 0, entry);
 		return lines.join("\n");
 	});
-}
-
-/**
- * Obsidian rejects these characters in filenames, long names are unreadable in the
- * explorer, and a trailing period would land next to the one before "md".
- */
-export function safeName(title: string): string {
-	const cleaned = oneLine(title.replace(/[/\\:*?"<>|#^[\]]/g, ""));
-	const capped = cleaned.length > 60 ? `${cleaned.slice(0, 60).trimEnd()}…` : cleaned;
-	return capped.replace(/[.\s]+$/, "") || "conversation";
 }
 
 /** Local time, because an ISO string would record a question asked at 16:37 as 14:37. */

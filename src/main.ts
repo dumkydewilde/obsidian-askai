@@ -1,9 +1,9 @@
 import { Editor, FileSystemAdapter, MarkdownView, Menu, Notice, Plugin, TFile, WorkspaceLeaf } from "obsidian";
 import { newRecord, type AskOptions, type ConversationRecord } from "./conversation";
-import { oneLine } from "./document";
+import { oneLine, safeName } from "./document";
 import { AnswerModal, QuestionModal } from "./modals";
 import { isProviderId, PROVIDERS, type ProviderId } from "./providers";
-import { conversationsFor, createConversation, localTimestamp, readConversation, safeName, titleOf } from "./store";
+import { conversationsFor, createConversation, localTimestamp, readConversation, titleOf } from "./store";
 import { ASK_VIEW_TYPE, AskView } from "./view";
 import { DEFAULT_SYSTEM_PROMPT, SUPERSEDED_SYSTEM_PROMPTS } from "./prompt";
 import {
