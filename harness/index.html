@@ -221,7 +221,7 @@
 				},
 			};
 
-			const { app, leaf, open, dump } = createApp({
+			const { app, leaf, open, dump, opened } = createApp({
 				data,
 				notes,
 				activePath: notePaths[0],
@@ -251,6 +251,12 @@
 			window.visible = VISIBLE;
 			window.notes = notePaths;
 			window.dump = dump;
+			window.opened = opened;
+			window.clickLink = (index = 0) => {
+				const link = document.querySelectorAll(`${VISIBLE} a.internal-link`)[index];
+				link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+				return link?.getAttribute("href") ?? null;
+			};
 			window.ask = async (question) => {
 				const input = view.contentEl.querySelector(VISIBLE + " .ask-ai-question-input");
 				input.value = question;

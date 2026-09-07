@@ -60,6 +60,8 @@ function unquote(value) {
 }
 
 export function createApp({ data, notes, activePath, leafContainer }) {
+	/** Every internal link the plugin asked the workspace to open. */
+	const opened = [];
 	/** path -> content. The vault. */
 	const contents = new Map(Object.entries(notes));
 	const files = new Map();
@@ -87,6 +89,10 @@ export function createApp({ data, notes, activePath, leafContainer }) {
 		getRightLeaf: () => null,
 		revealLeaf: async () => {},
 		getLeaf: () => ({ openFile: async (file) => console.info(`[open] ${file.path}`) }),
+		openLinkText: async (href, sourcePath, newLeaf) => {
+			opened.push({ href, sourcePath, newLeaf: Boolean(newLeaf) });
+			console.info(`[link] ${href} from ${sourcePath}${newLeaf ? " in a new tab" : ""}`);
+		},
 	});
 
 	const vault = Object.assign(new Events(), {
@@ -140,5 +146,6 @@ export function createApp({ data, notes, activePath, leafContainer }) {
 		open: (path) => workspace.trigger("file-open", files.get(path) ?? null),
 		/** What is on disk, so the page can show what the plugin actually wrote. */
 		dump: () => Object.fromEntries(contents),
+		opened: () => opened,
 	};
 }

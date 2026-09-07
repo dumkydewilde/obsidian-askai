@@ -229,7 +229,15 @@ export class WorkspaceLeaf {}
 
 export const MarkdownRenderer = {
 	async render(app, markdown, el, sourcePath, component) {
-		el.createDiv({ text: markdown });
+		// Wikilinks become the same anchors Obsidian produces, because navigating them
+		// is the plugin's own job in a custom pane and that has to be exercised.
+		const html = markdown.replace(
+			/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g,
+			(_, target, alias) =>
+				`<a class="internal-link" data-href="${target}" href="${target}">${alias || target}</a>`,
+		);
+		const block = el.createDiv();
+		block.innerHTML = html;
 	},
 };
 
@@ -241,6 +249,12 @@ export function setIcon(el, icon) {
 export function setTooltip(el, tooltip) {
 	el.setAttribute("aria-label", tooltip);
 }
+
+export const Keymap = {
+	isModEvent(event) {
+		return Boolean(event?.metaKey || event?.ctrlKey);
+	},
+};
 
 export function normalizePath(path) {
 	return path.replace(/\/+/g, "/").replace(/^\/|\/$/g, "");

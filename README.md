@@ -60,9 +60,9 @@ own context file applies and `[[wikilinks]]` resolve.
   its `[[wikilinks]]` and its code. The line under each question shows what the
   agent is reading while it works, then the model, how long it took, and tokens
   in and out.
-- **Citations are links.** A claim from the vault is cited as
-  `[[note name#heading]]`, so clicking it opens the note at the passage the
-  answer came from rather than naming a heading you then have to go find.
+- **Citations are links you can click.** A claim from the vault is cited as
+  `[[note name#heading]]`, and clicking it opens that note at that heading —
+  Cmd or Ctrl for a new tab, as everywhere else in Obsidian.
 
 ## Install
 
@@ -375,6 +375,12 @@ done; the debug port is unauthenticated.
   the first load of a new build, and linked from the notes they are about. That
   is a write into your vault on load; the alternative was dropping transcripts
   the previous version had promised to keep.
+- Navigating an internal link in an answer is the plugin's own job. Obsidian's
+  markdown renderer produces the anchors, but following them belongs to the
+  markdown view, so in a pane of its own every `[[note#heading]]` was inert until
+  one delegated click handler on the turn list called `openLinkText`. Delegated,
+  so it survives an answer being re-rendered as it streams, and resolved against
+  the note the conversation is about, so a bare `[[#heading]]` means that note's.
 - Copying one block hands back that block's markdown, matched to the rendered
   element by walking both in order and resyncing when they disagree — a list
   split by blank lines is several source blocks and one element. When they stop

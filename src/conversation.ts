@@ -1,4 +1,4 @@
-import { App, Component, MarkdownRenderer, Notice, TFile, setIcon, setTooltip } from "obsidian";
+import { App, Component, Keymap, MarkdownRenderer, Notice, TFile, setIcon, setTooltip } from "obsidian";
 import { PROVIDER_LABELS, providerOrDefault, type ProviderId } from "./providers";
 import { runAgent, type AskResult } from "./runner";
 import type AskAiPlugin from "./main";
@@ -88,6 +88,8 @@ export class Conversation {
 	mount(containerEl: HTMLElement): void {
 		containerEl.addClass("ask-ai-conversation");
 		this.turnsEl = containerEl.createDiv({ cls: "ask-ai-turns" });
+		// Delegated, so it survives an answer being re-rendered as it streams.
+		this.turnsEl.addEventListener("click", (event) => this.followLink(event));
 		this.turns = this.record.turns;
 		this.savedTurns = this.turns.length;
 		if (this.record.preamble) {
@@ -163,6 +165,22 @@ export class Conversation {
 		}
 		this.refreshSaveButton();
 		this.turnsEl.scrollTop = this.turnsEl.scrollHeight;
+	}
+
+	/**
+	 * A citation is only a link if it opens something. MarkdownRenderer produces the
+	 * anchors, but navigating them is the markdown view's job — in a plugin's own pane
+	 * nothing does it, so every [[note#heading]] in an answer was inert. Resolved
+	 * against the note the conversation is about, so a bare [[#heading]] means that
+	 * note's heading, and Cmd or Ctrl opens it in a new tab as it does everywhere else.
+	 */
+	private followLink(event: MouseEvent): void {
+		const anchor = (event.target as HTMLElement | null)?.closest("a.internal-link");
+		if (!anchor) return;
+		const href = anchor.getAttribute("data-href") ?? anchor.getAttribute("href");
+		if (!href) return;
+		event.preventDefault();
+		void this.app.workspace.openLinkText(href, this.file.path, Keymap.isModEvent(event));
 	}
 
 	/** The shell of one exchange, built the same way whether it is arriving or restored. */
