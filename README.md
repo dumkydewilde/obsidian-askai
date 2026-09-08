@@ -229,8 +229,8 @@ the dropdown. Whichever ran is printed in the footer under each answer.
 
 The prompt tells the agent to answer as a researcher: lead with the answer, use
 its own knowledge of the subject rather than treating the vault as the limit of
-what is knowable, cite vault notes and URLs, put method in a Sources section at
-the end instead of opening with what it searched for, keep it short, offer up
+what is knowable, cite vault notes and URLs as links you can click, close with a
+Sources section that is a bare list of those links, keep it short, offer up
 to three follow-up questions in a fenced `follow-ups` block when there are useful
 ones, and name the conversation in a `title` block on its first answer. The
 plugin lifts both blocks out of the answer, and turns them into buttons and into

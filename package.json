@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && node esbuild.config.mjs production",
     "install-local": "node scripts/install-local.mjs",
     "check": "node scripts/check.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "answers": "node scripts/answers.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
