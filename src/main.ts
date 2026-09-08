@@ -82,9 +82,21 @@ export default class AskAiPlugin extends Plugin {
 						.onClick(() => void this.startAsk(file, selection || null, { fresh: true })),
 				);
 
-				// In the sidebar every question already lands in the open conversation, so a
-				// separate follow-up item would be the same item twice.
-				const latest = this.settings.surface === "modal" ? conversationsFor(this.app, file)[0] : null;
+				// Asking opens a conversation of its own, so this is the way to add to one
+				// that is already going. In the sidebar that is the conversation on screen;
+				// in a modal there is nothing on screen, so the newest one is named.
+				if (this.settings.surface === "sidebar") {
+					if (conversationsFor(this.app, file).length) {
+						menu.addItem((item) =>
+							item
+								.setTitle(selection ? "Follow up about the selection" : "Follow up in the open conversation")
+								.setIcon("corner-down-right")
+								.onClick(() => void this.startAsk(file, selection || null, { fresh: false })),
+						);
+					}
+					return;
+				}
+				const latest = conversationsFor(this.app, file)[0];
 				if (latest) {
 					// Named, because a note can have several, and this continues the newest.
 					const agent = String(this.app.metadataCache.getFileCache(latest)?.frontmatter?.agent ?? "");
@@ -93,7 +105,7 @@ export default class AskAiPlugin extends Plugin {
 						item
 							.setTitle(`Follow up on ${titleOf(latest, file)}${with_}`)
 							.setIcon("corner-down-right")
-							.onClick(() => void this.startAsk(file, null, { fresh: false })),
+							.onClick(() => void this.startAsk(file, selection || null, { fresh: false })),
 					);
 				}
 			}),
@@ -199,7 +211,7 @@ export default class AskAiPlugin extends Plugin {
 				this.settings.effort = chosen.effort;
 				this.settings.web = chosen.web;
 				void this.saveSettings();
-				void this.startConversation(file, record, chosen, question, selection);
+				void this.startConversation(file, record, chosen, question, selection, options.fresh);
 			},
 		).open();
 	}
@@ -210,12 +222,13 @@ export default class AskAiPlugin extends Plugin {
 		options: AskOptions,
 		question: string,
 		selection: string | null,
+		fresh: boolean,
 	): Promise<void> {
-		// The sidebar keeps a conversation per note, so a question joins the one that is
-		// already there rather than starting over; the icon in its header starts over.
+		// A follow-up joins the conversation that is open; "Ask about…" starts its own,
+		// because a question about a passage has nothing to do with the thread already there.
 		if (this.settings.surface === "sidebar") {
 			const view = await this.revealSidebar();
-			await view.ask(file, options, question, selection);
+			await view.ask(file, options, question, selection, fresh);
 			return;
 		}
 		const modal = new AnswerModal(this.app, this, file, record, options);

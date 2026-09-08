@@ -22,8 +22,12 @@ Desktop only — it spawns a process, which Obsidian mobile cannot do.
 - **Ask AI about the selection** when text is selected. The passage stays with
   the question in the conversation and in the saved note, so "what does this do?"
   still makes sense a week later.
+- **Asking opens a conversation of its own**, so a question about a passage does
+  not land in the middle of the thread you had going about something else.
 - **Follow up** in the same conversation, from the box under the answer or from
-  the right-click menu later. Resumed by the agent that started it.
+  the right-click menu later. Resumed by the agent that started it. Switch agents
+  mid-conversation and the questions and answers so far are handed to the new one,
+  since only the agent that opened a thread can resume it.
 - **Conversations are notes in your vault.** Each one is a file with the
   questions as `## headings`, linked from the note it is about and carrying
   `type: ask-ai-conversation` in its frontmatter. That file is the record, not an
@@ -229,8 +233,8 @@ the dropdown. Whichever ran is printed in the footer under each answer.
 
 The prompt tells the agent to answer as a researcher: lead with the answer, use
 its own knowledge of the subject rather than treating the vault as the limit of
-what is knowable, cite vault notes and URLs, put method in a Sources section at
-the end instead of opening with what it searched for, keep it short, offer up
+what is knowable, cite vault notes and URLs as links you can click, close with a
+Sources section that is a bare list of those links, keep it short, offer up
 to three follow-up questions in a fenced `follow-ups` block when there are useful
 ones, and name the conversation in a `title` block on its first answer. The
 plugin lifts both blocks out of the answer, and turns them into buttons and into
@@ -294,7 +298,10 @@ measurements that are hard to eyeball — the padding that actually won, the
 sidebar font size against the note's, whether the footer clears the status bar.
 
 ```js
-await window.ask("What happens above the cutoff?")   // runs a whole turn
+await window.ask("What happens above the cutoff?")   // typed into the box
+await window.askAbout("What is this?", { selection: "…" })   // the right-click path
+window.focused()                                     // where the caret is
+window.spawned                                       // what each CLI was asked
 window.dump()                                        // every file, as written
 window.conversations()                               // the list, as rendered
 window.newConversation(); window.openNote(window.notes[1])
@@ -302,6 +309,8 @@ window.newConversation(); window.openNote(window.notes[1])
 
 That is how the round trip is checked: ask, read the file the plugin wrote, ask
 again and see it appended, start a second conversation and watch the list grow.
+`askAbout` goes through the real question modal, so which conversation a question
+lands in and where the caret ends up are checked the way the menu drives them.
 A conversation already on disk is seeded before the plugin loads, so restoring
 one is exercised as well as writing one — as is the one-time move of
 conversations out of an old `data.json`.
@@ -333,7 +342,10 @@ done; the debug port is unauthenticated.
   answer, a failure. Claude streams tokens, Codex delivers whole messages, Gemini
   streams tokens with no marker between turns; `runner.ts` does not know which.
 - A session belongs to the agent that opened it. Switching agent mid-conversation
-  starts a new one rather than handing a Codex thread id to Claude.
+  starts a new one rather than handing a Codex thread id to Claude, and the
+  questions and answers so far go into that first prompt so the new agent is not
+  answering a follow-up cold. Questions and answers only: the notes behind them
+  are in the vault, and it reads what it needs itself.
 - `Modal` and `ItemView` both carry undocumented fields the type definitions do
   not declare. A subclass field of the same name wins, because `target: ES2022`
   means class fields are defined rather than assigned, so a bare `titleEl;`

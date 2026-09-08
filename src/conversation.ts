@@ -47,6 +47,7 @@ export function newRecord(): ConversationRecord {
  * The modal and the sidebar are both thin hosts around this.
  */
 export class Conversation {
+	private rootEl!: HTMLElement;
 	private turnsEl!: HTMLElement;
 	private controlsEl!: HTMLElement;
 	private emptyEl: HTMLElement | null = null;
@@ -86,6 +87,7 @@ export class Conversation {
 	}
 
 	mount(containerEl: HTMLElement): void {
+		this.rootEl = containerEl;
 		containerEl.addClass("ask-ai-conversation");
 		this.turnsEl = containerEl.createDiv({ cls: "ask-ai-turns" });
 		// Delegated, so it survives an answer being re-rendered as it streams.
@@ -205,6 +207,12 @@ export class Conversation {
 		this.followUpInput?.focus();
 	}
 
+	/** Nothing has the caret, or nothing outside this pane does. */
+	private focusIsIdle(): boolean {
+		const active = this.rootEl.ownerDocument.activeElement;
+		return !active || active === this.rootEl.ownerDocument.body || this.rootEl.contains(active);
+	}
+
 	private iconButton(parent: HTMLElement, icon: string, label: string): HTMLButtonElement {
 		const button = parent.createEl("button", { cls: "clickable-icon ask-ai-icon-button" });
 		setIcon(button, icon);
@@ -287,6 +295,10 @@ export class Conversation {
 	async ask(question: string, selection: string | null): Promise<void> {
 		if (this.running) return;
 		this.running = true;
+		// Whether the question came from this pane — typed in the box, or clicked on its
+		// send button or a suggestion. Read now, because disabling the box takes the focus
+		// off it, and the answer may be a minute away.
+		const hadFocus = this.rootEl.contains(this.rootEl.ownerDocument.activeElement);
 		setIcon(this.askButton, "square");
 		setTooltip(this.askButton, "Stop");
 		this.followUpInput.setAttr("disabled", "true");
@@ -311,10 +323,11 @@ export class Conversation {
 				this.plugin.settings,
 				{
 					vaultPath: this.plugin.vaultPath(),
-					prompt: resumeSessionId ? question : buildPrompt(notePath, question, selection),
+					prompt: resumeSessionId ? question : buildPrompt(notePath, question, selection, this.turns),
 					provider: provider.id,
 					resumeSessionId,
 					newSessionId: resumeSessionId ? undefined : crypto.randomUUID(),
+					firstTurn: this.turns.length === 0,
 					model: this.options.model,
 					effort: this.options.effort,
 					web: this.options.web,
@@ -362,7 +375,10 @@ export class Conversation {
 			setIcon(this.askButton, "arrow-up");
 			setTooltip(this.askButton, "Ask");
 			this.followUpInput.removeAttribute("disabled");
-			this.followUpInput.focus();
+			// An answer can take a minute, and you carry on writing in the note while it
+			// runs. Taking the caret back then would put your typing in the wrong pane, so
+			// the box only claims focus this pane had and nothing else has taken since.
+			if (hadFocus && this.focusIsIdle()) this.followUpInput.focus();
 		}
 	}
 
@@ -541,8 +557,19 @@ class StatusLine {
 	}
 }
 
-function buildPrompt(notePath: string, question: string, selection: string | null): string {
+/**
+ * The turn that opens a session with an agent. A conversation that already has turns but
+ * cannot be resumed — you switched agents halfway through — gets them replayed here, so
+ * the new agent knows what was already asked instead of answering the follow-up cold.
+ * Questions and answers only: the notes and searches behind them are on disk, and this
+ * agent will read what it needs itself.
+ */
+function buildPrompt(notePath: string, question: string, selection: string | null, previous: DocTurn[] = []): string {
 	const parts = [`Note: ${notePath}`];
+	if (previous.length) {
+		const thread = previous.map((turn) => `Q: ${turn.question}\n\nA: ${turn.answer}`).join("\n\n---\n\n");
+		parts.push(`This conversation so far, answered by another agent:\n\n${thread}`);
+	}
 	if (selection) {
 		parts.push(`The question is about this selected passage:\n\n${selection}`);
 	}

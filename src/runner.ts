@@ -19,6 +19,8 @@ export interface AskRequest {
 	resumeSessionId?: string;
 	/** Start a new conversation under this id, for CLIs that let the caller pick one. */
 	newSessionId?: string;
+	/** Whether this is the first question of the conversation, which names it. */
+	firstTurn: boolean;
 	model: string;
 	effort: string;
 	web: boolean;
@@ -84,6 +86,7 @@ export function runAgent(
 			systemPrompt: settings.systemPrompt,
 			resumeSessionId: request.resumeSessionId,
 			newSessionId: request.newSessionId,
+			firstTurn: request.firstTurn,
 			model: request.model,
 			effort: request.effort,
 			web: request.web,

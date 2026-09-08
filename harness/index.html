@@ -80,6 +80,9 @@
 			function fakeAgent(binary, args) {
 				const resumed = args.includes("--resume");
 				const question = args[args.length - 1];
+				// Every run, so the page can read what the CLI was actually asked — whether a
+				// resumed turn sends only the question, and what a turn that cannot resume sends.
+				(window.spawned ??= []).push({ binary, args, resumed, prompt: question });
 				const answer = [
 					resumed
 						? "Above the cutoff every candidate is returned unranked."
@@ -203,6 +206,9 @@
 			// copied data.json is from before that setting existed and has it off.
 			data.keepInVault = true;
 			delete data.autoSave;
+			// This harness mounts the sidebar, so drive the sidebar rather than whatever
+			// the copied settings happen to say.
+			data.surface = "sidebar";
 			// And one conversation still in the settings file, in the old shape, so the
 			// one-time move of those into the vault is exercised rather than assumed.
 			data.sessions = {
@@ -228,6 +234,18 @@
 				leafContainer: document.getElementById("harness-leaf"),
 			});
 
+			// The stub's modal is detached, and a textarea outside the document cannot hold
+			// the caret — which is what decides where the caret goes back to when an answer
+			// lands. So the question modal goes into the page, as it does in Obsidian.
+			obsidian.Modal.prototype.open = function () {
+				document.body.appendChild(this.modalEl);
+				this.onOpen?.();
+			};
+			obsidian.Modal.prototype.close = function () {
+				this.onClose?.();
+				this.modalEl.remove();
+			};
+
 			const plugin = new AskAiPlugin(app, { id: "ask-ai", name: "Ask AI" });
 			await plugin.onload();
 
@@ -247,6 +265,11 @@
 
 			// Switching notes, asking a question, and starting a second conversation are
 			// the whole point of the per-note lists, so the harness can drive all three.
+			// So the plugin's own "reveal the sidebar" finds this leaf instead of asking
+			// the workspace for a right split the stub does not have.
+			leaf.view = view;
+			app.workspace.getLeavesOfType = (type) => (type === "ask-ai-view" ? [leaf] : []);
+
 			window.openNote = open;
 			window.visible = VISIBLE;
 			window.notes = notePaths;
@@ -259,6 +282,9 @@
 			};
 			window.ask = async (question) => {
 				const input = view.contentEl.querySelector(VISIBLE + " .ask-ai-question-input");
+				// Focused, because a question typed into the box is asked with the caret in
+				// it, and that is what the box uses to decide whether to take it back.
+				input.focus();
 				input.value = question;
 				view.contentEl
 					.querySelector(VISIBLE + " .ask-ai-send")
@@ -267,6 +293,30 @@
 				await new Promise((resolve) => setTimeout(resolve, 60));
 				return window.conversations();
 			};
+			/**
+			 * The right-click path: "Ask AI about the selection" and the follow-up item
+			 * next to it, through the real question modal, so what it does to the list of
+			 * conversations and to the caret is what the menu does.
+			 */
+			window.askAbout = async (question, { selection = null, fresh = true } = {}) => {
+				await plugin.startAsk(app.workspace.getActiveFile(), selection, { fresh });
+				const input = document.querySelector(".modal-content .ask-ai-question-input");
+				if (!input) throw new Error("the question modal did not open");
+				input.focus();
+				input.value = question;
+				input.dispatchEvent(new Event("input"));
+				input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+				await new Promise((resolve) => setTimeout(resolve, 120));
+				return window.conversations();
+			};
+			/** Where the caret is, which is the whole question about a pane stealing it. */
+			window.focused = () => {
+				const active = document.activeElement;
+				if (!active) return "none";
+				if (active === document.body) return "body";
+				return active.className || active.tagName.toLowerCase();
+			};
+
 			window.newConversation = () =>
 				view.contentEl.querySelector(".ask-ai-view-header button").dispatchEvent(new MouseEvent("click"));
 			window.conversations = () =>
