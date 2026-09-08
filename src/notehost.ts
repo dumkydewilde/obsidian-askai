@@ -70,9 +70,14 @@ export class NoteHost {
 		this.entries = [];
 	}
 
-	/** Ask in whichever conversation is open, which is what a follow-up means. */
-	async ask(options: AskOptions, question: string, selection: string | null): Promise<void> {
+	/**
+	 * Ask in whichever conversation is open, which is what a follow-up means — or in a
+	 * conversation of its own, which is what asking about a passage means: an answer
+	 * about three lines you highlighted has nothing to do with the thread already there.
+	 */
+	async ask(options: AskOptions, question: string, selection: string | null, fresh = false): Promise<void> {
 		await this.load();
+		if (fresh) await this.openBlank();
 		const conversation = this.current();
 		if (!conversation) return;
 		conversation.setOptions(options);
@@ -82,9 +87,14 @@ export class NoteHost {
 	/** A second conversation about the same note, rather than adding to this one. */
 	async startNew(): Promise<void> {
 		await this.load();
-		const blank = this.entries.find((entry) => !entry.file && entry.conversation?.isEmpty);
-		await this.activate(blank?.id ?? this.draft().id);
+		await this.openBlank();
 		this.focusInput();
+	}
+
+	/** Open an empty conversation, reusing one that is already empty rather than piling up. */
+	private async openBlank(): Promise<void> {
+		const blank = this.entries.find((entry) => !entry.file && entry.conversation?.isEmpty !== false);
+		await this.activate(blank?.id ?? this.draft().id);
 	}
 
 	/** The vault changed under us — a conversation was added, renamed or deleted. */

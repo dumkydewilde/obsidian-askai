@@ -154,10 +154,10 @@ export class AskView extends ItemView {
 		return host;
 	}
 
-	/** Show this note's conversations and run a question in the open one. */
-	async ask(file: TFile, options: AskOptions, question: string, selection: string | null): Promise<void> {
+	/** Show this note's conversations and run a question in one of them. */
+	async ask(file: TFile, options: AskOptions, question: string, selection: string | null, fresh: boolean): Promise<void> {
 		const host = this.show(file);
-		await host?.ask(options, question, selection);
+		await host?.ask(options, question, selection, fresh);
 	}
 
 	/** A second conversation about the same note, rather than adding to the open one. */

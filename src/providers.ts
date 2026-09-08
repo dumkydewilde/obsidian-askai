@@ -16,6 +16,8 @@ export interface RunContext {
 	resumeSessionId?: string;
 	/** Start a new conversation under this id, for CLIs that let the caller pick one. */
 	newSessionId?: string;
+	/** Whether this is the first question of the conversation, which names it. */
+	firstTurn: boolean;
 	model: string;
 	effort: string;
 	web: boolean;
@@ -117,7 +119,9 @@ function trailingReminder(context: RunContext): string {
 		parts.push("End your answer with the ```follow-ups fenced block when there are useful next questions.");
 	}
 	// Only on the turn that opens a conversation, which is the only turn it is wanted on.
-	if (!context.resumeSessionId && /```title/.test(context.systemPrompt)) {
+	// Not merely on the turn that opens a session: switching agents opens a second session
+	// in a conversation that already has a name.
+	if (context.firstTurn && /```title/.test(context.systemPrompt)) {
 		parts.push("This is the first answer in this conversation, so end with the ```title block too.");
 	}
 	return parts.length ? `\n\n${parts.join(" ")}` : "";
