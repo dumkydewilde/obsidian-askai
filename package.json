@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc --noEmit && node esbuild.config.mjs production",
+    "version": "node scripts/version-bump.mjs && git add manifest.json versions.json",
     "install-local": "node scripts/install-local.mjs",
     "check": "node scripts/check.mjs",
     "smoke": "node scripts/smoke.mjs",
