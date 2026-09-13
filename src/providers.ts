@@ -54,6 +54,15 @@ export interface Capabilities {
 	web: "tools" | "prompt" | "none";
 	/** Whether a follow-up can continue an earlier conversation. */
 	resume: boolean;
+	/**
+	 * How long a paused thread is likely to still be in this provider's prompt cache, in
+	 * minutes. Past it, resuming re-sends the whole transcript at full price, so replaying
+	 * the questions and answers into a new thread is cheaper. Nothing in a CLI's output
+	 * reports a cache hit, so these are the published behaviour rather than a measurement:
+	 * Anthropic caches for an hour when asked to, OpenAI and Google for minutes. Wrong in
+	 * either direction is cheap, and the settings override exists for when it is wrong.
+	 */
+	cacheMinutes: number;
 }
 
 export interface Provider {
@@ -179,6 +188,7 @@ const claude: Provider = {
 		efforts: { ...SHARED_EFFORTS, xhigh: "Extra high", max: "Max" },
 		web: "tools",
 		resume: true,
+		cacheMinutes: 60,
 	},
 
 	buildArgs(context) {
@@ -296,6 +306,7 @@ const codex: Provider = {
 		efforts: { ...SHARED_EFFORTS, xhigh: "Extra high" },
 		web: "tools",
 		resume: true,
+		cacheMinutes: 15,
 	},
 
 	buildArgs(context) {
@@ -399,6 +410,7 @@ const gemini: Provider = {
 		efforts: {},
 		web: "prompt",
 		resume: true,
+		cacheMinutes: 15,
 	},
 
 	buildArgs(context) {
@@ -472,7 +484,7 @@ const custom: Provider = {
 	defaultPath: "",
 	output: "text",
 	confinement: "Whatever the command you configured allows. The plugin cannot confine it.",
-	capabilities: { models: { "": "Default model" }, efforts: {}, web: "none", resume: false },
+	capabilities: { models: { "": "Default model" }, efforts: {}, web: "none", resume: false, cacheMinutes: 0 },
 
 	buildArgs(context, settings) {
 		const template = splitArgs(settings.customArgs);

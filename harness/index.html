@@ -176,6 +176,13 @@
 
 			// One conversation already on disk, as a plugin that has been used would leave
 			// it: this is what the list renders from and what restore() reads back.
+			// Dated three days back rather than to a fixed day, so it stays what it is here
+			// to be — a thread too cold to resume, whenever the harness is run.
+			const stamp = (daysAgo) => {
+				const date = new Date(Date.now() - daysAgo * 86400_000);
+				const pad = (n) => String(n).padStart(2, "0");
+				return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+			};
 			const seeded = `askai-conversations/${notePaths[0].split("/").pop().replace(/\.md$/, "")}/Vector index cutoff.md`;
 			notes[seeded] = [
 				"---",
@@ -183,8 +190,8 @@
 				`source: "[[${notePaths[0].split("/").pop().replace(/\.md$/, "")}]]"`,
 				"agent: claude",
 				"session: seeded-1",
-				"created: 2026-09-06T20:11",
-				"updated: 2026-09-06T20:14",
+				`created: ${stamp(3)}`,
+				`updated: ${stamp(3)}`,
 				"follow_ups:",
 				'  - "Why is it per mode?"',
 				'  - "What happens above it?"',
@@ -309,6 +316,23 @@
 				await new Promise((resolve) => setTimeout(resolve, 120));
 				return window.conversations();
 			};
+			/**
+			 * The two icons about the agent's thread: the cold marker and the button that
+			 * leaves the thread. `null` for one that is not showing, its tooltip for one that
+			 * is, since the tooltip is the whole explanation.
+			 */
+			window.thread = () => {
+				const showing = (icon) => {
+					const el = view.contentEl.querySelector(`${VISIBLE} .ask-ai-input-row [data-icon="${icon}"]`);
+					return el && !el.classList.contains("ask-ai-hidden") ? el.getAttribute("aria-label") : null;
+				};
+				return { cold: showing("snowflake"), branch: showing("git-branch") };
+			};
+			/** Leave the agent's thread but keep the conversation, as the icon does. */
+			window.branch = () =>
+				view.contentEl
+					.querySelector(`${VISIBLE} .ask-ai-input-row [data-icon="git-branch"]`)
+					.dispatchEvent(new MouseEvent("click"));
 			/** Where the caret is, which is the whole question about a pane stealing it. */
 			window.focused = () => {
 				const active = document.activeElement;

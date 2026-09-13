@@ -14,7 +14,12 @@ import esbuild from "esbuild";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outdir = await mkdtemp(join(tmpdir(), "ask-ai-check-"));
 await esbuild.build({
-	entryPoints: [join(root, "src/trailing.ts"), join(root, "src/markdown.ts"), join(root, "src/document.ts")],
+	entryPoints: [
+		join(root, "src/trailing.ts"),
+		join(root, "src/markdown.ts"),
+		join(root, "src/document.ts"),
+		join(root, "src/cache.ts"),
+	],
 	bundle: true,
 	format: "esm",
 	platform: "node",
@@ -26,6 +31,7 @@ const { splitBlocks, alignBlocks } = await import(pathToFileURL(join(outdir, "ma
 const { formatConversation, appendTurns, setFields, parseConversation, safeName } = await import(
 	pathToFileURL(join(outdir, "document.js")).href
 );
+const { cacheState, cacheMinutesFor, formatAge } = await import(pathToFileURL(join(outdir, "cache.js")).href);
 
 let failed = 0;
 function check(name, actual, expected) {
@@ -237,6 +243,44 @@ check("a heading with no answer is still a turn", parsed.turns[1], {
 });
 check("a heading inside a fence is not a question", parsed.turns.length, 3);
 check("the fenced heading stays in the answer", parsed.turns[2].answer.includes("## not a question"), true);
+
+// Whether a paused thread is still worth resuming, off the frontmatter stamp alone.
+// The stamp is local time with no offset, so it is compared against a local `now`.
+const now = new Date(2026, 2, 14, 12, 0).getTime();
+check("a thread asked in minutes ago is still cached", cacheState("2026-03-14T11:40", 60, now), {
+	ageMinutes: 20,
+	expired: false,
+});
+check("one from yesterday is not", cacheState("2026-03-13T12:00", 60, now), {
+	ageMinutes: 1440,
+	expired: true,
+});
+check("the window is exclusive, so 60 minutes on a 60-minute window still resumes", cacheState("2026-03-14T11:00", 60, now).expired, false);
+check("0 means never expire", cacheState("2020-01-01T00:00", 0, now), { ageMinutes: null, expired: false });
+check("a conversation with no stamp yet is not old", cacheState("", 60, now), { ageMinutes: null, expired: false });
+check("nor is one whose stamp was edited into nonsense", cacheState("last tuesday", 60, now), {
+	ageMinutes: null,
+	expired: false,
+});
+// A clock that moved backwards — a DST change, or a stamp written on another machine.
+check("a stamp in the future is not old either", cacheState("2026-03-14T13:00", 60, now).expired, false);
+
+// Every agent caches, and each for its own length of time, so the same 20-minute pause
+// is worth resuming for one and not for another.
+check("Claude Code caches for an hour", cacheMinutesFor("", "claude"), 60);
+check("Codex for minutes", cacheMinutesFor("", "codex"), 15);
+check("Gemini CLI likewise", cacheMinutesFor("", "gemini"), 15);
+check("a custom command has no thread to cache", cacheMinutesFor("", "custom"), 0);
+check("an agent this build does not have falls back", cacheMinutesFor("", "opencode"), 60);
+check("the setting overrides all of them", cacheMinutesFor("5", "claude"), 5);
+check("including down to never expiring", cacheMinutesFor("0", "claude"), 0);
+check("and a nonsense one is ignored", cacheMinutesFor("soon", "codex"), 15);
+check("20 minutes is cold for Codex", cacheState("2026-03-14T11:40", cacheMinutesFor("", "codex"), now).expired, true);
+check("and warm for Claude Code", cacheState("2026-03-14T11:40", cacheMinutesFor("", "claude"), now).expired, false);
+
+check("age in minutes", formatAge(40), "40 minutes");
+check("age in hours", formatAge(60), "1 hour");
+check("age in days", formatAge(60 * 24 * 2 + 30), "2 days");
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

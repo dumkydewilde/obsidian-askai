@@ -42,6 +42,12 @@ export interface AskAiSettings {
 	installedPrompt: string;
 	/** How long one question may run before the process is killed. */
 	timeoutSeconds: number;
+	/**
+	 * Overrides how long a paused conversation is assumed to still be in the agent's
+	 * prompt cache. Empty leaves each agent on its own window, which is the point of
+	 * having one per agent; "0" never expires, so a follow-up always resumes.
+	 */
+	cacheMinutes: string;
 }
 
 /** Where this vault keeps conversations, in the shape the store takes. */
@@ -79,6 +85,7 @@ export const DEFAULT_SETTINGS: AskAiSettings = {
 	systemPrompt: DEFAULT_SYSTEM_PROMPT,
 	installedPrompt: DEFAULT_SYSTEM_PROMPT,
 	timeoutSeconds: 180,
+	cacheMinutes: "",
 };
 
 /**
@@ -387,6 +394,25 @@ export class AskAiSettingTab extends PluginSettingTab {
 						const parsed = Number.parseInt(value, 10);
 						settings.timeoutSeconds =
 							Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SETTINGS.timeoutSeconds;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName("Resume a thread for")
+			.setDesc(
+				"Minutes a paused conversation is assumed to still be in the agent's prompt cache. " +
+					"Resuming after that re-sends the whole thread — every note it read, every search it " +
+					"ran — at full price, so a follow-up starts a new thread with the questions and answers " +
+					`replayed instead. Empty leaves each agent on its own window (${provider.label}: ` +
+					`${provider.capabilities.cacheMinutes || "never expires"}). 0 always resumes.`,
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder(String(provider.capabilities.cacheMinutes))
+					.setValue(settings.cacheMinutes)
+					.onChange(async (value) => {
+						settings.cacheMinutes = value.trim();
 						await this.plugin.saveSettings();
 					}),
 			);
