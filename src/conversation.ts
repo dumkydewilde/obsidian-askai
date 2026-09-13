@@ -552,7 +552,7 @@ export class Conversation {
 				await appendConversation(
 					this.app,
 					this.record.file,
-					{ agent: this.record.agent, session: this.record.session, updated, suggestions: this.record.suggestions },
+					{ agent: this.record.agent, session: this.record.session, updated },
 					fresh,
 				);
 			} else {
@@ -567,7 +567,6 @@ export class Conversation {
 						session: this.record.session,
 						created: updated,
 						updated,
-						suggestions: this.record.suggestions,
 					},
 					this.turns,
 				);

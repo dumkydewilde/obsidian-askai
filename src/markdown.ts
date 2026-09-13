@@ -33,6 +33,12 @@ export function splitBlocks(markdown: string): string[] {
 			current.push(line);
 			continue;
 		}
+		if (isTableDelimiter(line) && current.length) {
+			const header = current.pop()!;
+			flush();
+			current.push(header, line);
+			continue;
+		}
 		if (!line.trim()) {
 			flush();
 			continue;
@@ -43,15 +49,24 @@ export function splitBlocks(markdown: string): string[] {
 	return blocks;
 }
 
+/** The separator below a GFM table's header row. */
+function isTableDelimiter(line: string): boolean {
+	return /^\s*(?=.*\|)\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/.test(line);
+}
+
 /** Enough of the syntax gone that a source block and its rendered text can be compared. */
 function plain(text: string): string {
-	return text
+	const table = text.split("\n").some(isTableDelimiter);
+	const simplified = text
+		.split("\n")
+		.filter((line) => !isTableDelimiter(line))
+		.join("\n")
 		.replace(/```+[^\n]*|~~~+[^\n]*/g, "")
 		.replace(/\[\[([^\]|]*)\|?([^\]]*)\]\]/g, (_, target, alias) => alias || target)
 		.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
 		.replace(/[*_`~#>]/g, "")
-		.replace(/^\s*(?:[-*+]|\d+[.)])\s*/gm, "")
-		.replace(/\s+/g, " ")
+		.replace(/^\s*(?:[-*+]|\d+[.)])\s*/gm, "");
+	return (table ? simplified.replace(/\|/g, "").replace(/\s+/g, "") : simplified.replace(/\s+/g, " "))
 		.trim()
 		.toLowerCase();
 }

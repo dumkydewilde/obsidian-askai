@@ -42,11 +42,12 @@ Desktop only — it spawns a process, which Obsidian mobile cannot do.
   remember something the one above it did.
 - **Conversations are notes in your vault.** Each one is a file with the
   questions as `## headings`, linked from the note it is about and carrying
-  `type: ask-ai-conversation` in its frontmatter. That file is the record, not an
-  export of one: the sidebar reads it back, so a conversation survives a restart,
-  is searchable, shows up in the graph, can be listed by a Base, and moves or
-  goes away when you move or delete it. Edit an answer and the sidebar shows
-  what you wrote.
+  `type: ask-ai-conversation` and a one-line `description` in its frontmatter.
+  The description indexes the conversation's question headings and updates with
+  each answer. That file is the record, not an export of one: the sidebar reads
+  it back, so a conversation survives a restart, is searchable, shows up in the
+  graph, can be listed by a Base, and moves or goes away when you move or delete
+  it. Edit an answer and the sidebar shows what you wrote.
 - **As many conversations per note as you want.** The sidebar lists a note's
   conversations one collapsed line each — title, when it was last asked in, how
   many questions — and the open one below them. Click a line to continue that
@@ -68,8 +69,10 @@ Desktop only — it spawns a process, which Obsidian mobile cannot do.
   them at, still streaming if one was streaming.
 - **Suggested follow-ups.** The agent ends an answer with up to three next
   questions when there are useful ones, and they turn into buttons under the
-  answer. Answers are short by default because of it: the detail is a click away
-  instead of pre-emptive. Cut the paragraph about it from the system prompt in
+  answer. The buttons are shortcuts in the open conversation. The `agent` and
+  `session` frontmatter fields resume a conversation, not the suggested questions.
+  Answers are short by default because of it: the detail is a click away instead
+  of pre-emptive. Cut the paragraph about it from the system prompt in
   settings and both the block and the buttons stop appearing.
 - **Agent, model, thinking effort, and whether to search the web** picked per
   question: in the question box, and behind the cog in the conversation footer.

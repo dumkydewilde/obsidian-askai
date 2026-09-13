@@ -213,7 +213,7 @@ export class NoteHost {
 
 	private async read(file: TFile): Promise<ConversationRecord> {
 		const parsed = await readConversation(this.app, file);
-		return { file, title: titleOf(file, this.file), ...parsed };
+		return { file, title: titleOf(file, this.file), suggestions: [], ...parsed };
 	}
 
 	/**

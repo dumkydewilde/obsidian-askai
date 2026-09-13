@@ -28,7 +28,7 @@ await esbuild.build({
 });
 const { splitTrailing, stripTrailing } = await import(pathToFileURL(join(outdir, "trailing.js")).href);
 const { splitBlocks, alignBlocks } = await import(pathToFileURL(join(outdir, "markdown.js")).href);
-const { formatConversation, appendTurns, setFields, parseConversation, safeName } = await import(
+const { conversationDescription, formatConversation, appendTurns, setFields, parseConversation, safeName } = await import(
 	pathToFileURL(join(outdir, "document.js")).href
 );
 const { cacheState, cacheMinutesFor, formatAge } = await import(pathToFileURL(join(outdir, "cache.js")).href);
@@ -113,6 +113,21 @@ check(
 );
 
 check(
+	"a table keeps its markdown when copied",
+	alignBlocks(
+		["Intro.", "ColumnValuePlanPro"],
+		"Intro.\n| Column | Value |\n| --- | --- |\n| Plan | Pro |",
+	),
+	["Intro.", "| Column | Value |\n| --- | --- |\n| Plan | Pro |"],
+);
+
+check(
+	"a one-column table keeps its markdown when copied",
+	alignBlocks(["ColumnPlan"], "| Column |\n| --- |\n| Plan |"),
+	["| Column |\n| --- |\n| Plan |"],
+);
+
+check(
 	"an element with no matching block keeps its own text",
 	alignBlocks(["Something else entirely"], "A paragraph.\n\nAnother."),
 	["Something else entirely"],
@@ -156,7 +171,6 @@ const fields = {
 	session: "9c0f-1",
 	created: "2026-09-07T10:04",
 	updated: "2026-09-07T10:04",
-	suggestions: ["Why is it per mode?"],
 };
 const turns = [
 	{
@@ -171,14 +185,14 @@ const written = formatConversation(fields, turns);
 check("the question is an H2", /^## What does CUTOFF do\?$/m.test(written), true);
 check("the answer's own headings drop a level", /^### Sources$/m.test(written), true);
 check("the selection is quoted", /^> CUTOFF = 0\.82$/m.test(written), true);
-check("the follow-ups are frontmatter", /^follow_ups:\n {2}- "Why is it per mode\?"$/m.test(written), true);
+check("the description is frontmatter", /^description: "What does CUTOFF do\?"$/m.test(written), true);
+check("follow-ups stay out of frontmatter", !/^follow_ups:/m.test(written), true);
 check("one question needs no contents list", !written.includes("## Contents"), true);
 
 const read = parseConversation(written);
-check("frontmatter round-trips", { agent: read.agent, session: read.session, suggestions: read.suggestions }, {
+check("frontmatter round-trips", { agent: read.agent, session: read.session }, {
 	agent: "claude",
 	session: "9c0f-1",
-	suggestions: ["Why is it per mode?"],
 });
 check("turns round-trip", read.turns, turns);
 
@@ -191,13 +205,20 @@ check("a fenced heading is not a contents entry", (fenced.match(/^- \[\[#/gm) ??
 
 check("a second question grows a contents list", /^## Contents\n\n- \[\[#What does CUTOFF do\?\]\]\n- \[\[#And above it\?\]\]$/m.test(two), true);
 check("appending keeps both turns", parseConversation(two).turns.length, 2);
+check("appending rebuilds the description", /^description: "What does CUTOFF do\? · And above it\?"$/m.test(two), true);
 
-const restamped = setFields(two, { updated: "2026-09-07T11:00", suggestions: ["Only this one?"] });
+const restamped = setFields(two, { updated: "2026-09-07T11:00" });
 check("updated is rewritten in place", parseConversation(restamped).updated, "2026-09-07T11:00");
 check("a timestamp is left bare, so it reads as a date", /^updated: 2026-09-07T11:00$/m.test(restamped), true);
-// The items are lines of their own: replacing the key has to take them with it.
-check("the old follow-ups are replaced, not joined", parseConversation(restamped).suggestions, ["Only this one?"]);
-check("emptied follow-ups are dropped", parseConversation(setFields(two, { suggestions: [] })).suggestions, []);
+check("a continued conversation refreshes its description", /^description: "What does CUTOFF do\? · And above it\?"$/m.test(restamped), true);
+const legacyFollowUps = two.replace("updated: 2026-09-07T10:04", 'updated: 2026-09-07T10:04\nfollow_ups:\n  - "Why is it per mode?"');
+check("legacy follow-ups are removed on save", !/^follow_ups:/m.test(setFields(legacyFollowUps, { updated: "2026-09-07T11:00" })), true);
+check("legacy follow-ups are not restored", "suggestions" in parseConversation(legacyFollowUps), false);
+const longDescription = conversationDescription([
+	{ question: "A".repeat(230), answer: "" },
+	{ question: "The later question is still counted", answer: "" },
+]);
+check("a long description stays one readable line", longDescription.length <= 240 && longDescription.endsWith("… (2 questions)"), true);
 check("a key of your own is left alone", setFields(two + "", { updated: "x" }).includes("type: ask-ai-conversation"), true);
 check(
 	"other frontmatter survives",
