@@ -28,13 +28,26 @@ Desktop only — it spawns a process, which Obsidian mobile cannot do.
   the right-click menu later. Resumed by the agent that started it. Switch agents
   mid-conversation and the questions and answers so far are handed to the new one,
   since only the agent that opened a thread can resume it.
+- **A cold thread is not resumed.** Resuming replays the whole thread to the
+  agent — every note it read, every search it ran — which is nearly free while
+  the provider still has it cached and full price once it does not. So a
+  conversation you come back to hours later shows a snowflake on the Ask button,
+  hover it for why, and the next question opens a new thread with the
+  questions and answers replayed into it instead. Every agent caches, each for its
+  own length of time, so each has its own window.
+- **Leave a thread whenever you like**, with the branch icon next to the question
+  box. Same thing on demand: the conversation carries on, the agent's thread does
+  not, so the next question does not drag along everything it read to get here.
+  Either way that answer's footer reads `new thread`, which is why it may not
+  remember something the one above it did.
 - **Conversations are notes in your vault.** Each one is a file with the
   questions as `## headings`, linked from the note it is about and carrying
-  `type: ask-ai-conversation` in its frontmatter. That file is the record, not an
-  export of one: the sidebar reads it back, so a conversation survives a restart,
-  is searchable, shows up in the graph, can be listed by a Base, and moves or
-  goes away when you move or delete it. Edit an answer and the sidebar shows
-  what you wrote.
+  `type: ask-ai-conversation` and a one-line `description` in its frontmatter.
+  The description indexes the conversation's question headings and updates with
+  each answer. That file is the record, not an export of one: the sidebar reads
+  it back, so a conversation survives a restart, is searchable, shows up in the
+  graph, can be listed by a Base, and moves or goes away when you move or delete
+  it. Edit an answer and the sidebar shows what you wrote.
 - **As many conversations per note as you want.** The sidebar lists a note's
   conversations one collapsed line each — title, when it was last asked in, how
   many questions — and the open one below them. Click a line to continue that
@@ -56,8 +69,10 @@ Desktop only — it spawns a process, which Obsidian mobile cannot do.
   them at, still streaming if one was streaming.
 - **Suggested follow-ups.** The agent ends an answer with up to three next
   questions when there are useful ones, and they turn into buttons under the
-  answer. Answers are short by default because of it: the detail is a click away
-  instead of pre-emptive. Cut the paragraph about it from the system prompt in
+  answer. The buttons are shortcuts in the open conversation. The `agent` and
+  `session` frontmatter fields resume a conversation, not the suggested questions.
+  Answers are short by default because of it: the detail is a click away instead
+  of pre-emptive. Cut the paragraph about it from the system prompt in
   settings and both the block and the buttons stop appearing.
 - **Agent, model, thinking effort, and whether to search the web** picked per
   question: in the question box, and behind the cog in the conversation footer.
@@ -218,6 +233,7 @@ Arguments  run {prompt}
 | A folder per note | on | Off, they sit side by side as `Note — Title.md` |
 | Research heading | `## Research` | Match your own note conventions |
 | Timeout | 180s | Long questions over a large vault |
+| Resume a thread for | each agent's own window | You know better than the published cache TTLs. 0 always resumes |
 | System prompt | see below | Change how answers are written |
 
 ### Model names
@@ -302,6 +318,7 @@ await window.ask("What happens above the cutoff?")   // typed into the box
 await window.askAbout("What is this?", { selection: "…" })   // the right-click path
 window.focused()                                     // where the caret is
 window.spawned                                       // what each CLI was asked
+window.thread(); window.branch()                     // the cold Ask button, and leaving the thread
 window.dump()                                        // every file, as written
 window.conversations()                               // the list, as rendered
 window.newConversation(); window.openNote(window.notes[1])
@@ -363,6 +380,17 @@ a bump that skipped this would tag a release that never ships.
   questions and answers so far go into that first prompt so the new agent is not
   answering a follow-up cold. Questions and answers only: the notes behind them
   are in the vault, and it reads what it needs itself.
+- Age is the second reason to start a new thread instead, and the branch icon is
+  the third; all three take the same path. No CLI reports a cache hit, so
+  `cache.ts` guesses from the clock: the `updated` stamp in the frontmatter
+  against that agent's window — an hour for Claude Code, which asks Anthropic for
+  the hour-long cache TTL, a quarter of one for Codex and Gemini CLI, whose
+  providers cache for minutes. That makes the conversation note the record of the
+  agent's memory as well as of the conversation, which it already was: the session
+  id lives there too. Both errors are cheap. Too short a window replays two pages
+  of text that were still cached; too long re-sends the whole transcript once.
+  Neither loses an answer, and only the second costs real money, which is why the
+  windows lean short.
 - `Modal` and `ItemView` both carry undocumented fields the type definitions do
   not declare. A subclass field of the same name wins, because `target: ES2022`
   means class fields are defined rather than assigned, so a bare `titleEl;`

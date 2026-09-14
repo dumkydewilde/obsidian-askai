@@ -160,7 +160,6 @@ export default class AskAiPlugin extends Plugin {
 						session: session.id,
 						created,
 						updated: created,
-						suggestions: session.turns?.[session.turns.length - 1]?.suggestions ?? [],
 					},
 					turns,
 				);
@@ -265,7 +264,7 @@ export default class AskAiPlugin extends Plugin {
 	private async latestRecord(file: TFile): Promise<ConversationRecord> {
 		const latest = conversationsFor(this.app, file)[0];
 		if (!latest) return newRecord();
-		return { file: latest, title: titleOf(latest, file), ...(await readConversation(this.app, latest)) };
+		return { file: latest, title: titleOf(latest, file), suggestions: [], ...(await readConversation(this.app, latest)) };
 	}
 
 	private activeFile(): TFile | null {

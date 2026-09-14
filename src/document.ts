@@ -18,14 +18,14 @@ export interface DocTurn {
 
 /** What the markdown cannot carry: which agent holds the thread, and which thread. */
 export interface DocFields {
+	/** A bounded one-line index of the conversation's question headings. */
+	description?: string;
 	/** A wikilink to the note the conversation is about. */
 	source: string;
 	agent: string;
 	session: string;
 	created: string;
 	updated: string;
-	/** The next questions offered under the newest answer. */
-	suggestions: string[];
 }
 
 export interface ParsedConversation {
@@ -33,7 +33,6 @@ export interface ParsedConversation {
 	session: string;
 	created: string;
 	updated: string;
-	suggestions: string[];
 	/** Anything written above the first question, kept and shown rather than dropped. */
 	preamble: string;
 	turns: DocTurn[];
@@ -45,13 +44,14 @@ const ANSWERED_BY = /^\*Answered by (.+)\*$/;
 
 /** A whole conversation note, for the first write. */
 export function formatConversation(fields: DocFields, turns: DocTurn[]): string {
-	return withContents(`${frontmatter(fields)}\n${turns.map(section).join("\n\n")}\n`);
+	return withContents(`${frontmatter({ ...fields, description: conversationDescription(turns) })}\n${turns.map(section).join("\n\n")}\n`);
 }
 
 /** Later answers are appended, so an edit to an earlier one is never overwritten. */
 export function appendTurns(content: string, turns: DocTurn[]): string {
 	if (!turns.length) return content;
-	return withContents(`${content.trimEnd()}\n\n${turns.map(section).join("\n\n")}\n`);
+	const appended = withContents(`${content.trimEnd()}\n\n${turns.map(section).join("\n\n")}\n`);
+	return setFields(appended, { description: conversationDescription(parseConversation(appended).turns) });
 }
 
 /**
@@ -64,6 +64,11 @@ export function setFields(content: string, fields: Partial<DocFields>): string {
 	// anything new goes on the end.
 	const merged: string[] = [];
 	for (let i = 0; i < lines.length; i++) {
+		// Remove the legacy persisted `follow_ups` field and its list items.
+		if (frontmatterKey(lines[i]) === "follow_ups") {
+			while (i + 1 < lines.length && /^\s+-\s/.test(lines[i + 1])) i++;
+			continue;
+		}
 		const key = ownedKey(lines[i]);
 		if (!key || !(key in fields)) {
 			merged.push(lines[i]);
@@ -102,7 +107,6 @@ export function parseConversation(content: string): ParsedConversation {
 		session: front.session ?? "",
 		created: front.created ?? "",
 		updated: front.updated ?? front.created ?? "",
-		suggestions: front.follow_ups ?? [],
 		preamble,
 		turns,
 	};
@@ -121,7 +125,7 @@ function frontmatter(fields: DocFields): string {
 		// A property a Base can filter on, so conversations can be listed as a table
 		// without a folder query.
 		`type: ${CONVERSATION_TYPE}`,
-		...(["source", "agent", "session", "created", "updated", "suggestions"] as (keyof DocFields)[]).flatMap((key) =>
+		...(["description", "source", "agent", "session", "created", "updated"] as (keyof DocFields)[]).flatMap((key) =>
 			fieldLines(key, fields),
 		),
 		"---",
@@ -131,27 +135,27 @@ function frontmatter(fields: DocFields): string {
 }
 
 const KEYS: Record<string, keyof DocFields> = {
+	description: "description",
 	source: "source",
 	agent: "agent",
 	session: "session",
 	created: "created",
 	updated: "updated",
-	follow_ups: "suggestions",
 };
 
 /** The frontmatter key a line sets, when it is one this plugin writes. */
 function ownedKey(line: string): keyof DocFields | null {
-	const name = line.match(/^([A-Za-z_][\w-]*):/)?.[1];
+	const name = frontmatterKey(line);
 	return name && name in KEYS ? KEYS[name] : null;
+}
+
+function frontmatterKey(line: string): string | null {
+	return line.match(/^([A-Za-z_][\w-]*):/)?.[1] ?? null;
 }
 
 function fieldLines(key: keyof DocFields, fields: Partial<DocFields>): string[] {
 	const value = fields[key];
 	if (value === undefined) return [];
-	if (key === "suggestions") {
-		const list = value as string[];
-		return list.length ? ["follow_ups:", ...list.map((item) => `  - ${quote(item)}`)] : [];
-	}
 	return [`${key}: ${quote(String(value))}`];
 }
 
@@ -250,6 +254,27 @@ function heading(question: string): string {
 
 export function oneLine(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
+}
+
+/** A bounded one-line index of question headings, rebuilt on every write. */
+export function conversationDescription(turns: DocTurn[]): string {
+	const questions = turns.map((turn) => heading(turn.question));
+	if (!questions.length) return "Conversation";
+
+	const limit = 240;
+	const suffix = `… (${questions.length} ${questions.length === 1 ? "question" : "questions"})`;
+	const included: string[] = [];
+	for (const [index, question] of questions.entries()) {
+		const candidate = [...included, question].join(" · ");
+		const ending = index === questions.length - 1 ? "" : ` · ${suffix}`;
+		if (candidate.length + ending.length <= limit) {
+			included.push(question);
+			continue;
+		}
+		if (!included.length) included.push(question.slice(0, limit - ` · ${suffix}`.length).trimEnd());
+		return `${included.join(" · ")} · ${suffix}`;
+	}
+	return included.join(" · ");
 }
 
 /**

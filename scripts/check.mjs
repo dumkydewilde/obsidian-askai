@@ -14,7 +14,12 @@ import esbuild from "esbuild";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outdir = await mkdtemp(join(tmpdir(), "ask-ai-check-"));
 await esbuild.build({
-	entryPoints: [join(root, "src/trailing.ts"), join(root, "src/markdown.ts"), join(root, "src/document.ts")],
+	entryPoints: [
+		join(root, "src/trailing.ts"),
+		join(root, "src/markdown.ts"),
+		join(root, "src/document.ts"),
+		join(root, "src/cache.ts"),
+	],
 	bundle: true,
 	format: "esm",
 	platform: "node",
@@ -23,9 +28,10 @@ await esbuild.build({
 });
 const { splitTrailing, stripTrailing } = await import(pathToFileURL(join(outdir, "trailing.js")).href);
 const { splitBlocks, alignBlocks } = await import(pathToFileURL(join(outdir, "markdown.js")).href);
-const { formatConversation, appendTurns, setFields, parseConversation, safeName } = await import(
+const { conversationDescription, formatConversation, appendTurns, setFields, parseConversation, safeName } = await import(
 	pathToFileURL(join(outdir, "document.js")).href
 );
+const { cacheState, cacheMinutesFor, formatAge } = await import(pathToFileURL(join(outdir, "cache.js")).href);
 
 let failed = 0;
 function check(name, actual, expected) {
@@ -107,6 +113,21 @@ check(
 );
 
 check(
+	"a table keeps its markdown when copied",
+	alignBlocks(
+		["Intro.", "ColumnValuePlanPro"],
+		"Intro.\n| Column | Value |\n| --- | --- |\n| Plan | Pro |",
+	),
+	["Intro.", "| Column | Value |\n| --- | --- |\n| Plan | Pro |"],
+);
+
+check(
+	"a one-column table keeps its markdown when copied",
+	alignBlocks(["ColumnPlan"], "| Column |\n| --- |\n| Plan |"),
+	["| Column |\n| --- |\n| Plan |"],
+);
+
+check(
 	"an element with no matching block keeps its own text",
 	alignBlocks(["Something else entirely"], "A paragraph.\n\nAnother."),
 	["Something else entirely"],
@@ -150,7 +171,6 @@ const fields = {
 	session: "9c0f-1",
 	created: "2026-09-07T10:04",
 	updated: "2026-09-07T10:04",
-	suggestions: ["Why is it per mode?"],
 };
 const turns = [
 	{
@@ -165,14 +185,14 @@ const written = formatConversation(fields, turns);
 check("the question is an H2", /^## What does CUTOFF do\?$/m.test(written), true);
 check("the answer's own headings drop a level", /^### Sources$/m.test(written), true);
 check("the selection is quoted", /^> CUTOFF = 0\.82$/m.test(written), true);
-check("the follow-ups are frontmatter", /^follow_ups:\n {2}- "Why is it per mode\?"$/m.test(written), true);
+check("the description is frontmatter", /^description: "What does CUTOFF do\?"$/m.test(written), true);
+check("follow-ups stay out of frontmatter", !/^follow_ups:/m.test(written), true);
 check("one question needs no contents list", !written.includes("## Contents"), true);
 
 const read = parseConversation(written);
-check("frontmatter round-trips", { agent: read.agent, session: read.session, suggestions: read.suggestions }, {
+check("frontmatter round-trips", { agent: read.agent, session: read.session }, {
 	agent: "claude",
 	session: "9c0f-1",
-	suggestions: ["Why is it per mode?"],
 });
 check("turns round-trip", read.turns, turns);
 
@@ -185,13 +205,20 @@ check("a fenced heading is not a contents entry", (fenced.match(/^- \[\[#/gm) ??
 
 check("a second question grows a contents list", /^## Contents\n\n- \[\[#What does CUTOFF do\?\]\]\n- \[\[#And above it\?\]\]$/m.test(two), true);
 check("appending keeps both turns", parseConversation(two).turns.length, 2);
+check("appending rebuilds the description", /^description: "What does CUTOFF do\? · And above it\?"$/m.test(two), true);
 
-const restamped = setFields(two, { updated: "2026-09-07T11:00", suggestions: ["Only this one?"] });
+const restamped = setFields(two, { updated: "2026-09-07T11:00" });
 check("updated is rewritten in place", parseConversation(restamped).updated, "2026-09-07T11:00");
 check("a timestamp is left bare, so it reads as a date", /^updated: 2026-09-07T11:00$/m.test(restamped), true);
-// The items are lines of their own: replacing the key has to take them with it.
-check("the old follow-ups are replaced, not joined", parseConversation(restamped).suggestions, ["Only this one?"]);
-check("emptied follow-ups are dropped", parseConversation(setFields(two, { suggestions: [] })).suggestions, []);
+check("a continued conversation refreshes its description", /^description: "What does CUTOFF do\? · And above it\?"$/m.test(restamped), true);
+const legacyFollowUps = two.replace("updated: 2026-09-07T10:04", 'updated: 2026-09-07T10:04\nfollow_ups:\n  - "Why is it per mode?"');
+check("legacy follow-ups are removed on save", !/^follow_ups:/m.test(setFields(legacyFollowUps, { updated: "2026-09-07T11:00" })), true);
+check("legacy follow-ups are not restored", "suggestions" in parseConversation(legacyFollowUps), false);
+const longDescription = conversationDescription([
+	{ question: "A".repeat(230), answer: "" },
+	{ question: "The later question is still counted", answer: "" },
+]);
+check("a long description stays one readable line", longDescription.length <= 240 && longDescription.endsWith("… (2 questions)"), true);
 check("a key of your own is left alone", setFields(two + "", { updated: "x" }).includes("type: ask-ai-conversation"), true);
 check(
 	"other frontmatter survives",
@@ -237,6 +264,44 @@ check("a heading with no answer is still a turn", parsed.turns[1], {
 });
 check("a heading inside a fence is not a question", parsed.turns.length, 3);
 check("the fenced heading stays in the answer", parsed.turns[2].answer.includes("## not a question"), true);
+
+// Whether a paused thread is still worth resuming, off the frontmatter stamp alone.
+// The stamp is local time with no offset, so it is compared against a local `now`.
+const now = new Date(2026, 2, 14, 12, 0).getTime();
+check("a thread asked in minutes ago is still cached", cacheState("2026-03-14T11:40", 60, now), {
+	ageMinutes: 20,
+	expired: false,
+});
+check("one from yesterday is not", cacheState("2026-03-13T12:00", 60, now), {
+	ageMinutes: 1440,
+	expired: true,
+});
+check("the window is exclusive, so 60 minutes on a 60-minute window still resumes", cacheState("2026-03-14T11:00", 60, now).expired, false);
+check("0 means never expire", cacheState("2020-01-01T00:00", 0, now), { ageMinutes: null, expired: false });
+check("a conversation with no stamp yet is not old", cacheState("", 60, now), { ageMinutes: null, expired: false });
+check("nor is one whose stamp was edited into nonsense", cacheState("last tuesday", 60, now), {
+	ageMinutes: null,
+	expired: false,
+});
+// A clock that moved backwards — a DST change, or a stamp written on another machine.
+check("a stamp in the future is not old either", cacheState("2026-03-14T13:00", 60, now).expired, false);
+
+// Every agent caches, and each for its own length of time, so the same 20-minute pause
+// is worth resuming for one and not for another.
+check("Claude Code caches for an hour", cacheMinutesFor("", "claude"), 60);
+check("Codex for minutes", cacheMinutesFor("", "codex"), 15);
+check("Gemini CLI likewise", cacheMinutesFor("", "gemini"), 15);
+check("a custom command has no thread to cache", cacheMinutesFor("", "custom"), 0);
+check("an agent this build does not have falls back", cacheMinutesFor("", "opencode"), 60);
+check("the setting overrides all of them", cacheMinutesFor("5", "claude"), 5);
+check("including down to never expiring", cacheMinutesFor("0", "claude"), 0);
+check("and a nonsense one is ignored", cacheMinutesFor("soon", "codex"), 15);
+check("20 minutes is cold for Codex", cacheState("2026-03-14T11:40", cacheMinutesFor("", "codex"), now).expired, true);
+check("and warm for Claude Code", cacheState("2026-03-14T11:40", cacheMinutesFor("", "claude"), now).expired, false);
+
+check("age in minutes", formatAge(40), "40 minutes");
+check("age in hours", formatAge(60), "1 hour");
+check("age in days", formatAge(60 * 24 * 2 + 30), "2 days");
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

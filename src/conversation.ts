@@ -1,4 +1,5 @@
 import { App, Component, Keymap, MarkdownRenderer, Notice, TFile, setIcon, setTooltip } from "obsidian";
+import { cacheMinutesFor, cacheState, formatAge, FRESH, type CacheState } from "./cache";
 import { PROVIDER_LABELS, providerOrDefault, type ProviderId } from "./providers";
 import { runAgent, type AskResult } from "./runner";
 import type AskAiPlugin from "./main";
@@ -30,6 +31,11 @@ export interface ConversationRecord {
 	agent: string;
 	session: string;
 	created: string;
+	/**
+	 * When the last answer landed, to the minute. Also how stale the agent's thread is,
+	 * which decides whether a follow-up resumes it or starts a new one.
+	 */
+	updated: string;
 	/** The next questions offered under the newest answer. */
 	suggestions: string[];
 	/** Anything written above the first question in the note, kept rather than dropped. */
@@ -39,7 +45,17 @@ export interface ConversationRecord {
 
 /** A conversation that has not been asked anything yet, so has no note either. */
 export function newRecord(): ConversationRecord {
-	return { file: null, title: "", agent: "", session: "", created: "", suggestions: [], preamble: "", turns: [] };
+	return {
+		file: null,
+		title: "",
+		agent: "",
+		session: "",
+		created: "",
+		updated: "",
+		suggestions: [],
+		preamble: "",
+		turns: [],
+	};
 }
 
 /**
@@ -50,6 +66,8 @@ export class Conversation {
 	private rootEl!: HTMLElement;
 	private turnsEl!: HTMLElement;
 	private controlsEl!: HTMLElement;
+	/** Leave the agent's thread and carry the questions and answers into a new one. */
+	private threadButton!: HTMLButtonElement;
 	private emptyEl: HTMLElement | null = null;
 	private followUpInput!: HTMLTextAreaElement;
 	private askButton!: HTMLButtonElement;
@@ -109,7 +127,6 @@ export class Conversation {
 
 		const footer = containerEl.createDiv({ cls: "ask-ai-footer" });
 		this.controlsEl = footer.createDiv({ cls: "ask-ai-controls ask-ai-hidden" });
-		this.renderControls();
 
 		// One row: the question gets every pixel the icons on either side do not need.
 		const row = footer.createDiv({ cls: "ask-ai-input-row" });
@@ -127,11 +144,16 @@ export class Conversation {
 		this.saveButton.setAttr("disabled", "true");
 		this.saveButton.addEventListener("click", () => void this.save());
 
+		this.threadButton = this.iconButton(row, "git-branch", "Continue in a new thread");
+		this.threadButton.addEventListener("click", () => this.branch());
+
 		this.followUpInput = row.createEl("textarea", {
 			cls: "ask-ai-question-input",
 			attr: { rows: "1", placeholder: "Ask…" },
 		});
 		this.followUpInput.addEventListener("input", () => this.resizeInput());
+		// A pane left open goes cold while it sits there, and nothing else would notice.
+		this.followUpInput.addEventListener("focus", () => this.renderThread());
 		this.followUpInput.addEventListener("keydown", (event) => {
 			if (event.key === "Enter" && !event.shiftKey) {
 				event.preventDefault();
@@ -139,12 +161,17 @@ export class Conversation {
 			}
 		});
 
+		// The send button itself says when its question will start fresh, rather than
+		// taking space from the input row for a separate marker.
 		this.askButton = this.iconButton(row, "arrow-up", "Ask");
 		this.askButton.addClass("ask-ai-send");
 		this.askButton.addEventListener("click", () => {
 			if (this.running) this.controller?.abort();
 			else this.submitFollowUp();
 		});
+
+		// Now that every control it draws exists.
+		this.renderControls();
 
 		if (this.turns.length) void this.restore();
 	}
@@ -255,6 +282,68 @@ export class Conversation {
 				this.persistOptions();
 			});
 		}
+
+		// Switching agent already means a new thread, so both icons change with it.
+		this.renderThread();
+	}
+
+	/** Whether the agent's own thread can be resumed at all, whatever its age. */
+	private get resumable(): boolean {
+		// Through providerOrDefault on both sides, so this agrees with the resume decision
+		// in ask() even when the settings file names an agent this build does not have.
+		if (!this.record.session || this.record.agent !== providerOrDefault(this.options.provider).id) return false;
+		return providerOrDefault(this.record.agent).capabilities.resume;
+	}
+
+	/** How old the resumable thread is, and whether that is old enough to give up on. */
+	private staleness(): CacheState {
+		if (!this.resumable) return FRESH;
+		return cacheState(this.record.updated, cacheMinutesFor(this.plugin.settings.cacheMinutes, this.record.agent));
+	}
+
+	/**
+	 * The two icons about the agent's thread rather than about the conversation: whether
+	 * it has gone cold, and the way to leave it. Cheap to recompute, so it is redrawn
+	 * whenever you might be about to type a question.
+	 */
+	private renderThread(): void {
+		const { expired, ageMinutes } = this.staleness();
+		const agent = providerOrDefault(this.record.agent).label;
+
+		if (expired && ageMinutes !== null) {
+			this.label(
+				this.askButton,
+				`Cold thread — last answered ${formatAge(ageMinutes)} ago, so ${agent} has probably dropped ` +
+					"it from its prompt cache. The next question starts a new thread, replaying these " +
+					"questions and answers.",
+			);
+			setIcon(this.askButton, "snowflake");
+		} else {
+			setIcon(this.askButton, "arrow-up");
+			this.label(this.askButton, "Ask");
+		}
+
+		// Hidden rather than disabled while there is no thread to leave: an icon that can
+		// do nothing is noise, and a disabled button never shows the tooltip saying why.
+		this.threadButton.toggleClass("ask-ai-hidden", !this.resumable);
+		this.label(
+			this.threadButton,
+			`Continue in a new thread — replays the questions and answers into a fresh ${agent} thread, ` +
+				"dropping everything it read to get here.",
+		);
+	}
+
+	/**
+	 * Give up the agent's thread but keep the conversation. The next question then takes
+	 * the path a switched agent takes — a new session with the questions and answers
+	 * replayed into it — which is the cheap way to carry on and the only way to shed a
+	 * thread that has grown mostly out of file reads.
+	 */
+	private branch(): void {
+		if (!this.resumable) return;
+		this.record.session = "";
+		this.renderThread();
+		new Notice("The next question starts a new thread.");
 	}
 
 	private addSelect(options: Record<string, string>, value: string, label: string, onChange: (value: string) => void): void {
@@ -300,7 +389,7 @@ export class Conversation {
 		// off it, and the answer may be a minute away.
 		const hadFocus = this.rootEl.contains(this.rootEl.ownerDocument.activeElement);
 		setIcon(this.askButton, "square");
-		setTooltip(this.askButton, "Stop");
+		this.label(this.askButton, "Stop");
 		this.followUpInput.setAttr("disabled", "true");
 		this.emptyEl?.remove();
 		this.emptyEl = null;
@@ -312,8 +401,17 @@ export class Conversation {
 		const { turn, status, answerEl } = this.startTurn(question, selection);
 
 		const notePath = this.file.path;
-		// A session belongs to the agent that opened it, so switching agents starts over.
-		const resumeSessionId = this.record.agent === provider.id ? this.record.session || undefined : undefined;
+		// Read before the note is written, which is what moves the clock this measures.
+		const stale = this.staleness().expired;
+		// A session belongs to the agent that opened it, so switching agents starts over —
+		// and so does a thread the provider has probably stopped caching, because resuming
+		// that one re-sends every note it read at full price to save replaying two pages
+		// of questions and answers.
+		const resumeSessionId =
+			this.record.agent === provider.id && !stale ? this.record.session || undefined : undefined;
+		// A conversation that already had turns and is not resuming one is starting a new
+		// thread: it has been told what was asked before, but it did not live through it.
+		const newThread = this.turns.length > 0 && !resumeSessionId;
 		const controller = new AbortController();
 		this.controller = controller;
 		const render = new StreamingMarkdown(this.app, this.component, answerEl, notePath, () => this.turnsEl);
@@ -342,11 +440,14 @@ export class Conversation {
 			);
 
 			const { answer, suggestions, title } = splitTrailing(result.answer);
-			const footer = formatFooter(result, provider.label);
+			// Recorded, because "new thread" is why an answer may not remember something
+			// the one above it did, and the footer is the only place that can say so.
+			const footer = formatFooter(result, provider.label, newThread);
 			answerEl.removeClass("ask-ai-streaming");
 			await render.finish(answer);
 			status.settle(footer);
 			this.turns.push({ question, answer, selection, footer });
+			this.record.updated = localTimestamp();
 			this.record.suggestions = suggestions;
 			// The agent names the conversation on its first answer, because the first
 			// question makes a poor name for it ("In one sentence, what is this note about?").
@@ -372,9 +473,8 @@ export class Conversation {
 		} finally {
 			this.running = false;
 			this.controller = null;
-			setIcon(this.askButton, "arrow-up");
-			setTooltip(this.askButton, "Ask");
 			this.followUpInput.removeAttribute("disabled");
+			this.renderThread();
 			// An answer can take a minute, and you carry on writing in the note while it
 			// runs. Taking the caret back then would put your typing in the wrong pane, so
 			// the box only claims focus this pane had and nothing else has taken since.
@@ -444,13 +544,15 @@ export class Conversation {
 		if (!fresh.length && this.record.file) return;
 
 		this.saveButton.setAttr("disabled", "true");
-		const updated = localTimestamp();
+		// The newest answer's own stamp, so the file and the staleness check agree on when
+		// the thread was last touched rather than differing by however long a save waited.
+		const updated = this.record.updated || localTimestamp();
 		try {
 			if (this.record.file) {
 				await appendConversation(
 					this.app,
 					this.record.file,
-					{ agent: this.record.agent, session: this.record.session, updated, suggestions: this.record.suggestions },
+					{ agent: this.record.agent, session: this.record.session, updated },
 					fresh,
 				);
 			} else {
@@ -465,7 +567,6 @@ export class Conversation {
 						session: this.record.session,
 						created: updated,
 						updated,
-						suggestions: this.record.suggestions,
 					},
 					this.turns,
 				);
@@ -559,16 +660,17 @@ class StatusLine {
 
 /**
  * The turn that opens a session with an agent. A conversation that already has turns but
- * cannot be resumed — you switched agents halfway through — gets them replayed here, so
- * the new agent knows what was already asked instead of answering the follow-up cold.
+ * is not being resumed — you switched agents halfway through, or the old thread has gone
+ * cold enough that resuming it costs more than replaying it — gets them replayed here,
+ * so the agent knows what was already asked instead of answering the follow-up cold.
  * Questions and answers only: the notes and searches behind them are on disk, and this
- * agent will read what it needs itself.
+ * agent will read what it needs itself. That is the saving, and the loss.
  */
 function buildPrompt(notePath: string, question: string, selection: string | null, previous: DocTurn[] = []): string {
 	const parts = [`Note: ${notePath}`];
 	if (previous.length) {
 		const thread = previous.map((turn) => `Q: ${turn.question}\n\nA: ${turn.answer}`).join("\n\n---\n\n");
-		parts.push(`This conversation so far, answered by another agent:\n\n${thread}`);
+		parts.push(`This conversation so far, from before this session:\n\n${thread}`);
 	}
 	if (selection) {
 		parts.push(`The question is about this selected passage:\n\n${selection}`);
@@ -577,11 +679,12 @@ function buildPrompt(notePath: string, question: string, selection: string | nul
 	return parts.join("\n\n");
 }
 
-function formatFooter(result: AskResult, providerLabel: string): string {
+function formatFooter(result: AskResult, providerLabel: string, freshThread = false): string {
 	const parts: string[] = [result.model ?? providerLabel];
 	if (result.durationMs !== null) parts.push(`${(result.durationMs / 1000).toFixed(1)}s`);
 	if (result.inputTokens !== null) parts.push(`${compact(result.inputTokens)} in`);
 	if (result.outputTokens !== null) parts.push(`${compact(result.outputTokens)} out`);
+	if (freshThread) parts.push("new thread");
 	return parts.join(" · ");
 }
 
