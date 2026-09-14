@@ -18,6 +18,12 @@ export interface RunContext {
 	newSessionId?: string;
 	/** Whether this is the first question of the conversation, which names it. */
 	firstTurn: boolean;
+	/**
+	 * Absolute path of an image the question is about. The prompt names it too, so a CLI
+	 * whose read tool opens images needs nothing here; this is for the ones that take an
+	 * image as an attachment instead.
+	 */
+	imagePath?: string;
 	model: string;
 	effort: string;
 	web: boolean;
@@ -328,6 +334,11 @@ const codex: Provider = {
 		);
 		if (context.model) args.push("--model", context.model);
 		if (context.effort) args.push("--config", `model_reasoning_effort="${context.effort}"`);
+		// Codex reads a note with shell commands rather than a read tool, and no shell
+		// command shows it a PNG, so an image has to be attached. `--image=<file>` and not
+		// `--image <file>`: on a fresh run the flag takes many values, and given a space it
+		// swallows the prompt positional that follows as a second image.
+		if (context.imagePath) args.push(`--image=${context.imagePath}`);
 
 		if (context.resumeSessionId) args.push(context.resumeSessionId);
 		// No --append-system-prompt equivalent, and --ignore-user-config drops the config

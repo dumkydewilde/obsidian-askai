@@ -17,6 +17,31 @@
 	white-space: pre-wrap;
 }
 
+/* The image a question was asked about, next to the same accent bar a passage gets, so
+   the two read as the same thing: what this question is about. Capped short — it is a
+   reminder of which image, not the image. */
+.ask-ai-image {
+	margin-bottom: var(--size-4-3);
+	padding-left: var(--size-4-3);
+	border-left: 3px solid var(--interactive-accent);
+	/* Clear of the copy button in the turn's corner. */
+	padding-right: var(--size-4-6);
+}
+
+.ask-ai-image img {
+	display: block;
+	max-width: 100%;
+	max-height: 10em;
+	border-radius: var(--radius-s);
+}
+
+.ask-ai-image-name {
+	margin-top: var(--size-2-2);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	word-break: break-all;
+}
+
 /* Tall enough to read an answer without scrolling every other line, and a fixed
    height rather than a max- so it does not resize as the answer streams in. */
 .ask-ai-modal {

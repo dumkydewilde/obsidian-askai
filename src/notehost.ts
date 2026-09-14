@@ -1,5 +1,6 @@
 import { App, Component, TFile, setIcon, setTooltip } from "obsidian";
 import { Conversation, newRecord, type AskOptions, type ConversationRecord } from "./conversation";
+import type { AskContext } from "./document";
 import type AskAiPlugin from "./main";
 import { conversationsFor, readConversation, titleOf } from "./store";
 
@@ -75,13 +76,13 @@ export class NoteHost {
 	 * conversation of its own, which is what asking about a passage means: an answer
 	 * about three lines you highlighted has nothing to do with the thread already there.
 	 */
-	async ask(options: AskOptions, question: string, selection: string | null, fresh = false): Promise<void> {
+	async ask(options: AskOptions, question: string, context: AskContext, fresh = false): Promise<void> {
 		await this.load();
 		if (fresh) await this.openBlank();
 		const conversation = this.current();
 		if (!conversation) return;
 		conversation.setOptions(options);
-		await conversation.ask(question, selection);
+		await conversation.ask(question, context);
 	}
 
 	/** A second conversation about the same note, rather than adding to this one. */

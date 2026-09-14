@@ -1,7 +1,68 @@
 /**
- * How the agent is told to answer. Its own file so the smoke suite can run the real
- * prompt against a real CLI without dragging in the settings tab, and Obsidian with it.
+ * How the agent is told to answer, and what it is told to answer about. Its own file so
+ * the smoke suite can run the real prompt against a real CLI without dragging in the
+ * settings tab, and Obsidian with it.
  */
+
+import type { AskContext, DocTurn } from "./document";
+
+/**
+ * The turn that opens a session with an agent. A conversation that already has turns but
+ * is not being resumed — you switched agents halfway through, or the old thread has gone
+ * cold enough that resuming it costs more than replaying it — gets them replayed here,
+ * so the agent knows what was already asked instead of answering the follow-up cold.
+ * Questions and answers only: the notes and searches behind them are on disk, and this
+ * agent will read what it needs itself. That is the saving, and the loss.
+ */
+export function buildPrompt(
+	vaultPath: string,
+	notePath: string,
+	question: string,
+	context: AskContext,
+	previous: DocTurn[] = [],
+): string {
+	const parts = [`Note: ${notePath}`];
+	if (previous.length) {
+		const thread = previous.map((turn) => `Q: ${turn.question}\n\nA: ${turn.answer}`).join("\n\n---\n\n");
+		parts.push(`This conversation so far, from before this session:\n\n${thread}`);
+	}
+	parts.push(...askedAbout(vaultPath, context));
+	parts.push(`Question: ${question}`);
+	return parts.join("\n\n");
+}
+
+/**
+ * A question into a session the agent is still holding. The note and everything it read
+ * for the last answer are already there; what it has not been told is what this question
+ * was asked about, and without this a passage or an image picked in the right-click menu
+ * was shown in the pane, saved in the note, and never reached the agent.
+ */
+export function followUpPrompt(vaultPath: string, question: string, context: AskContext): string {
+	return [...askedAbout(vaultPath, context), question].join("\n\n");
+}
+
+/** What the question is about, beyond the note: the passage, the image, or neither. */
+function askedAbout(vaultPath: string, context: AskContext): string[] {
+	const parts: string[] = [];
+	if (context.selection) parts.push(`The question is about this selected passage:\n\n${context.selection}`);
+	// An agent handed the path to a PNG will answer from the filename unless it is told
+	// to open it, and the path is absolute because that is what a read tool takes.
+	if (context.image) {
+		parts.push(
+			`The question is about this image. Look at it before answering: ${absolutePath(vaultPath, context.image)}`,
+		);
+	}
+	return parts;
+}
+
+/** The image as a CLI has to be handed it: a path on disk, not a path in the vault. */
+export function imagePathFor(vaultPath: string, context: AskContext): string | undefined {
+	return context.image ? absolutePath(vaultPath, context.image) : undefined;
+}
+
+function absolutePath(vaultPath: string, vaultRelative: string): string {
+	return `${vaultPath.replace(/\/$/, "")}/${vaultRelative}`;
+}
 
 export const DEFAULT_SYSTEM_PROMPT = [
 	"You are a researcher answering a question about a note in an Obsidian vault.",
