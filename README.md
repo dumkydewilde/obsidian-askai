@@ -362,6 +362,11 @@ The tag is what ships: `.github/workflows/release.yml` builds it and attaches
 `main.js`, `manifest.json` and `styles.css`, which is what BRAT and the community
 plugin list read. Nothing about merging to `main` reaches an installed vault.
 
+Every pull request must bump the version with `npm version patch`, `npm version
+minor`, or `npm version major`. The `Version metadata` check compares the pull
+request with its base and requires the package, manifest, lockfile, and Obsidian
+version map to agree. Run it locally with `npm run check:version -- --base <base>`.
+
 `npm version` only knows `package.json`, so `scripts/version-bump.mjs` runs as its
 `version` lifecycle script and carries the number into the two files Obsidian reads
 — `manifest.json`, which it installs against, and `versions.json`, which tells an
