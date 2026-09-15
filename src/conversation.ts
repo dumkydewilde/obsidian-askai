@@ -6,8 +6,9 @@ import type AskAiPlugin from "./main";
 import { appendConversation, createConversation, localTimestamp } from "./store";
 import { alignBlocks } from "./markdown";
 import { splitTrailing, stripTrailing } from "./trailing";
+import { buildPrompt, followUpPrompt, imagePathFor } from "./prompt";
 import { effortFor, modelOptionsFor, storeOptions, WEB_OPTIONS } from "./settings";
-import { oneLine, safeName, type DocTurn } from "./document";
+import { oneLine, safeName, type AskContext, type DocTurn } from "./document";
 
 /** What to run a question with, chosen per question rather than only in settings. */
 export interface AskOptions {
@@ -183,7 +184,7 @@ export class Conversation {
 	 */
 	private async restore(): Promise<void> {
 		for (const [index, stored] of this.turns.entries()) {
-			const { turn, status, answerEl } = this.startTurn(stored.question, stored.selection ?? null);
+			const { turn, status, answerEl } = this.startTurn(stored.question, stored);
 			status.settle(stored.footer ?? "");
 			answerEl.removeClass("ask-ai-streaming");
 			await MarkdownRenderer.render(this.app, stored.answer, answerEl, this.file.path, this.component);
@@ -213,12 +214,13 @@ export class Conversation {
 	}
 
 	/** The shell of one exchange, built the same way whether it is arriving or restored. */
-	private startTurn(question: string, selection: string | null): { turn: HTMLElement; status: StatusLine; answerEl: HTMLElement } {
+	private startTurn(question: string, context: AskContext): { turn: HTMLElement; status: StatusLine; answerEl: HTMLElement } {
 		const turn = this.turnsEl.createDiv({ cls: "ask-ai-turn" });
-		if (selection) {
-			// The question on its own reads as a non-sequitur later ("what does this do?"),
-			// so the passage it was asked about stays with it.
-			turn.createDiv({ cls: "ask-ai-selection", text: selection });
+		// The question on its own reads as a non-sequitur later ("what does this do?"), so
+		// whatever it was asked about — a passage, an image — stays with it.
+		if (context.image) renderAskedImage(this.app, turn, context.image);
+		if (context.selection) {
+			turn.createDiv({ cls: "ask-ai-selection", text: context.selection });
 		}
 		turn.createDiv({ cls: "ask-ai-question", text: question });
 		const status = new StatusLine(turn);
@@ -377,11 +379,11 @@ export class Conversation {
 		if (!question) return;
 		this.followUpInput.value = "";
 		this.resizeInput();
-		void this.ask(question, null);
+		void this.ask(question, {});
 	}
 
 	/** Run one question. The first call on a note starts a session; later calls resume it. */
-	async ask(question: string, selection: string | null): Promise<void> {
+	async ask(question: string, context: AskContext): Promise<void> {
 		if (this.running) return;
 		this.running = true;
 		// Whether the question came from this pane — typed in the box, or clicked on its
@@ -398,7 +400,7 @@ export class Conversation {
 		this.suggestionsEl = null;
 
 		const provider = providerOrDefault(this.options.provider);
-		const { turn, status, answerEl } = this.startTurn(question, selection);
+		const { turn, status, answerEl } = this.startTurn(question, context);
 
 		const notePath = this.file.path;
 		// Read before the note is written, which is what moves the clock this measures.
@@ -416,12 +418,20 @@ export class Conversation {
 		this.controller = controller;
 		const render = new StreamingMarkdown(this.app, this.component, answerEl, notePath, () => this.turnsEl);
 
+		const vaultPath = this.plugin.vaultPath();
 		try {
 			const result = await runAgent(
 				this.plugin.settings,
 				{
-					vaultPath: this.plugin.vaultPath(),
-					prompt: resumeSessionId ? question : buildPrompt(notePath, question, selection, this.turns),
+					vaultPath,
+					// A resumed session already has the note and everything read for it, so
+					// only what is new to this question goes with it.
+					prompt: resumeSessionId
+						? followUpPrompt(vaultPath, question, context)
+						: buildPrompt(vaultPath, notePath, question, context, this.turns),
+					// Separately from the prompt, because a CLI that takes an image as an
+					// attachment rather than a path needs the file itself.
+					imagePath: imagePathFor(vaultPath, context),
 					provider: provider.id,
 					resumeSessionId,
 					newSessionId: resumeSessionId ? undefined : crypto.randomUUID(),
@@ -446,7 +456,7 @@ export class Conversation {
 			answerEl.removeClass("ask-ai-streaming");
 			await render.finish(answer);
 			status.settle(footer);
-			this.turns.push({ question, answer, selection, footer });
+			this.turns.push({ question, answer, ...context, footer });
 			this.record.updated = localTimestamp();
 			this.record.suggestions = suggestions;
 			// The agent names the conversation on its first answer, because the first
@@ -489,7 +499,7 @@ export class Conversation {
 		this.suggestionsEl = el;
 		for (const suggestion of suggestions) {
 			const chip = el.createEl("button", { cls: "ask-ai-suggestion", text: suggestion });
-			chip.addEventListener("click", () => void this.ask(suggestion, null));
+			chip.addEventListener("click", () => void this.ask(suggestion, {}));
 		}
 		this.turnsEl.scrollTop = this.turnsEl.scrollHeight;
 	}
@@ -659,24 +669,17 @@ class StatusLine {
 }
 
 /**
- * The turn that opens a session with an agent. A conversation that already has turns but
- * is not being resumed — you switched agents halfway through, or the old thread has gone
- * cold enough that resuming it costs more than replaying it — gets them replayed here,
- * so the agent knows what was already asked instead of answering the follow-up cold.
- * Questions and answers only: the notes and searches behind them are on disk, and this
- * agent will read what it needs itself. That is the saving, and the loss.
+ * The image a question was asked about, above the question. Obsidian serves vault files
+ * to its own window through a resource path; a file that has gone missing since falls
+ * back to its path, which at least says what the question was about.
  */
-function buildPrompt(notePath: string, question: string, selection: string | null, previous: DocTurn[] = []): string {
-	const parts = [`Note: ${notePath}`];
-	if (previous.length) {
-		const thread = previous.map((turn) => `Q: ${turn.question}\n\nA: ${turn.answer}`).join("\n\n---\n\n");
-		parts.push(`This conversation so far, from before this session:\n\n${thread}`);
+export function renderAskedImage(app: App, parent: HTMLElement, path: string): void {
+	const wrapper = parent.createDiv({ cls: "ask-ai-image" });
+	const file = app.vault.getAbstractFileByPath(path);
+	if (file instanceof TFile) {
+		wrapper.createEl("img", { attr: { src: app.vault.getResourcePath(file), alt: path } });
 	}
-	if (selection) {
-		parts.push(`The question is about this selected passage:\n\n${selection}`);
-	}
-	parts.push(`Question: ${question}`);
-	return parts.join("\n\n");
+	wrapper.createDiv({ cls: "ask-ai-image-name", text: path });
 }
 
 function formatFooter(result: AskResult, providerLabel: string, freshThread = false): string {

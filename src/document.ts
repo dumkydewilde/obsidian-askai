@@ -7,11 +7,21 @@
  * No Obsidian imports: `npm run check` runs this without an app.
  */
 
-export interface DocTurn {
-	question: string;
-	answer: string;
+/**
+ * What a question was asked about, beyond the note itself: a passage highlighted in it,
+ * an image embedded in it, or neither. Both can be set — a selection that runs across a
+ * diagram is one question about both.
+ */
+export interface AskContext {
 	/** The passage the question was asked about, when it was asked about one. */
 	selection?: string | null;
+	/** Vault path of the image the question was asked about, when it was about one. */
+	image?: string | null;
+}
+
+export interface DocTurn extends AskContext {
+	question: string;
+	answer: string;
 	/** The line under the question: which model, how long, tokens in and out. */
 	footer?: string;
 }
@@ -169,15 +179,18 @@ function quote(value: string): string {
 
 function section(turn: DocTurn): string {
 	const parts = [`## ${heading(turn.question)}`];
-	if (turn.selection?.trim()) parts.push(blockquote(turn.selection.trim()));
+	// The image goes in as an embed, so the conversation note shows the thing the
+	// question was about rather than a path to it.
+	const asked = [turn.image ? `![[${turn.image}]]` : "", turn.selection?.trim() ?? ""].filter(Boolean).join("\n\n");
+	if (asked) parts.push(blockquote(asked));
 	parts.push(demoteHeadings(turn.answer.trim()));
 	if (turn.footer) parts.push(`*Answered by ${turn.footer}*`);
 	return parts.join("\n\n");
 }
 
-/** The passage a question was asked about, kept with it so the answer still reads. */
-function blockquote(selection: string): string {
-	return selection
+/** What a question was asked about, kept with it so the answer still reads. */
+function blockquote(asked: string): string {
+	return asked
 		.split("\n")
 		.map((line) => `> ${line}`.trimEnd())
 		.join("\n");
@@ -359,10 +372,21 @@ function readSection(question: string, lines: string[]): DocTurn {
 	while (body.length && !body[body.length - 1].trim()) body.pop();
 
 	let selection: string | null = null;
+	let image: string | null = null;
 	if (body[0]?.startsWith(">")) {
 		const quoted: string[] = [];
 		while (body.length && body[0].startsWith(">")) quoted.push(body.shift()!.replace(/^>\s?/, ""));
-		selection = quoted.join("\n").trim();
+		// An embed on the first line is the image the question was about; anything below
+		// it is the passage. Everything else is all passage, including an embed further
+		// down, which is part of what was highlighted rather than the subject of it.
+		const asked = quoted.join("\n").trim();
+		const embed = asked.match(/^!\[\[([^\]\n]+)\]\](?:\n([\s\S]*))?$/);
+		if (embed) {
+			image = embed[1].split("|")[0].trim();
+			selection = (embed[2] ?? "").trim() || null;
+		} else {
+			selection = asked || null;
+		}
 		while (body.length && !body[0].trim()) body.shift();
 	}
 
@@ -378,6 +402,7 @@ function readSection(question: string, lines: string[]): DocTurn {
 		question,
 		answer: promoteHeadings(body.join("\n").trim()),
 		selection,
+		image,
 		footer,
 	};
 }

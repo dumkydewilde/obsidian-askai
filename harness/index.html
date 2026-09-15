@@ -173,6 +173,17 @@
 			if (notePaths.length < 2) notePaths.push("Ideas/A note.md", "Ideas/Another note.md");
 			const notes = {};
 			for (const path of notePaths) notes[path] = `# ${path.split("/").pop().replace(/\.md$/, "")}\n\nSome content.\n`;
+			// An image to ask about. The stub has no disk, so a "file" is its content and
+			// getResourcePath hands that back — which for this one is the image itself.
+			const IMAGE = "attachments/figure 2.png";
+			notes[IMAGE] =
+				"data:image/svg+xml;base64," +
+				btoa(
+					'<svg xmlns="http://www.w3.org/2000/svg" width="96" height="144">' +
+						'<rect width="96" height="48" fill="#7b2ff7"/>' +
+						'<rect y="48" width="96" height="48" fill="#ffd400"/>' +
+						'<rect y="96" width="96" height="48" fill="#00a3a3"/></svg>',
+				);
 
 			// One conversation already on disk, as a plugin that has been used would leave
 			// it: this is what the list renders from and what restore() reads back.
@@ -280,6 +291,7 @@
 			window.openNote = open;
 			window.visible = VISIBLE;
 			window.notes = notePaths;
+			window.image = IMAGE;
 			window.dump = dump;
 			window.opened = opened;
 			window.clickLink = (index = 0) => {
@@ -301,12 +313,12 @@
 				return window.conversations();
 			};
 			/**
-			 * The right-click path: "Ask AI about the selection" and the follow-up item
-			 * next to it, through the real question modal, so what it does to the list of
-			 * conversations and to the caret is what the menu does.
+			 * The right-click path: "Ask AI about the selection", "about this image", and
+			 * the follow-up item next to them, through the real question modal, so what it
+			 * does to the list of conversations and to the caret is what the menu does.
 			 */
-			window.askAbout = async (question, { selection = null, fresh = true } = {}) => {
-				await plugin.startAsk(app.workspace.getActiveFile(), selection, { fresh });
+			window.askAbout = async (question, { selection = null, image = null, fresh = true } = {}) => {
+				await plugin.startAsk(app.workspace.getActiveFile(), { selection, image }, { fresh });
 				const input = document.querySelector(".modal-content .ask-ai-question-input");
 				if (!input) throw new Error("the question modal did not open");
 				input.focus();

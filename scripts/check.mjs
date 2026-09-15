@@ -19,6 +19,7 @@ await esbuild.build({
 		join(root, "src/markdown.ts"),
 		join(root, "src/document.ts"),
 		join(root, "src/cache.ts"),
+		join(root, "src/embeds.ts"),
 	],
 	bundle: true,
 	format: "esm",
@@ -32,6 +33,7 @@ const { conversationDescription, formatConversation, appendTurns, setFields, par
 	pathToFileURL(join(outdir, "document.js")).href
 );
 const { cacheState, cacheMinutesFor, formatAge } = await import(pathToFileURL(join(outdir, "cache.js")).href);
+const { imageEmbedAt, imageEmbedsIn } = await import(pathToFileURL(join(outdir, "embeds.js")).href);
 
 let failed = 0;
 function check(name, actual, expected) {
@@ -177,6 +179,7 @@ const turns = [
 		question: "What does CUTOFF do?",
 		answer: "It is the per-mode similarity floor.\n\n## Sources\n\n- [[Lance notes#Cutoff]]",
 		selection: "CUTOFF = 0.82",
+		image: null,
 		footer: "claude-opus-5 · 3.7s · 10.8k in · 173 out",
 	},
 ];
@@ -195,6 +198,34 @@ check("frontmatter round-trips", { agent: read.agent, session: read.session }, {
 	session: "9c0f-1",
 });
 check("turns round-trip", read.turns, turns);
+
+// A question asked about an image carries the image, as an embed, so the conversation
+// note shows what was asked about rather than a path to it.
+const withImage = [
+	{
+		question: "What is this diagram showing?",
+		answer: "The read path.",
+		selection: null,
+		image: "attachments/read path.png",
+		footer: "Codex",
+	},
+	{
+		question: "And this part of it?",
+		answer: "The cache.",
+		selection: "the lower half",
+		image: "attachments/read path.png",
+		footer: "Codex",
+	},
+];
+const images = formatConversation(fields, withImage);
+check("the image is quoted as an embed", /^> !\[\[attachments\/read path\.png\]\]$/m.test(images), true);
+check("an image and a passage are quoted together", /^> !\[\[attachments\/read path\.png\]\]\n>\n> the lower half$/m.test(images), true);
+check("image turns round-trip", parseConversation(images).turns, withImage);
+check(
+	"an embed further down a quote is part of the passage, not the subject",
+	parseConversation(formatConversation(fields, [{ question: "Q", answer: "A", selection: "see ![[a.png]]" }])).turns[0],
+	{ question: "Q", answer: "A", selection: "see ![[a.png]]", image: null, footer: undefined },
+);
 
 const two = appendTurns(written, [{ question: "And above it?", answer: "Everything is returned.", footer: "Codex" }]);
 const fenced = appendTurns(written, [
@@ -260,6 +291,7 @@ check("a heading with no answer is still a turn", parsed.turns[1], {
 	question: "A question I typed myself",
 	answer: "",
 	selection: null,
+	image: null,
 	footer: undefined,
 });
 check("a heading inside a fence is not a question", parsed.turns.length, 3);
@@ -305,3 +337,26 @@ check("age in days", formatAge(60 * 24 * 2 + 30), "2 days");
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);
+
+// Which image the right-click menu means, from the line the caret is on. Both the way
+// Obsidian writes an embed and the way markdown does, because a vault holds both.
+check("a wikilink embed", imageEmbedAt("![[diagram.png]]", 0)?.target, "diagram.png");
+check("with a display width", imageEmbedAt("![[diagram.png|300]]", 4)?.target, "diagram.png");
+check("in a folder", imageEmbedAt("![[attachments/read path.png]]", 0)?.target, "attachments/read path.png");
+check("a markdown embed", imageEmbedAt("![alt](assets/shot.jpg)", 3)?.target, "assets/shot.jpg");
+check("percent-escaped", imageEmbedAt("![](assets/read%20path.png)", 3)?.target, "assets/read path.png");
+check("with a title after it", imageEmbedAt('![a](s.png "A shot")', 2)?.target, "s.png");
+check("a link to a note is not an image", imageEmbedAt("![[Some note]]", 0), null);
+check("nor is a plain link to one", imageEmbedAt("[[diagram.png]]", 0), null);
+check("a caret elsewhere on the line still means the image", imageEmbedAt("See ![[diagram.png]] above", 24)?.target, "diagram.png");
+check(
+	"with two on a line, the caret picks",
+	imageEmbedAt("![[a.png]] ![[b.png]]", 14)?.target,
+	"b.png",
+);
+check("both kinds are found in the order written", imageEmbedsIn("![[a.png]] ![x](b.png)").map((e) => e.target), [
+	"a.png",
+	"b.png",
+]);
+check("a remote image is still an embed, and the caller resolves it to nothing", imageEmbedAt("![](https://x.test/a.png)", 3)?.target, "https://x.test/a.png");
+

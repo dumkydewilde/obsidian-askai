@@ -22,6 +22,14 @@ Desktop only — it spawns a process, which Obsidian mobile cannot do.
 - **Ask AI about the selection** when text is selected. The passage stays with
   the question in the conversation and in the saved note, so "what does this do?"
   still makes sense a week later.
+- **Ask AI about this image** with the caret on an embedded image — a diagram, a
+  screenshot, a photo of a whiteboard. Same menu item, same command palette; what
+  the caret is on decides what the question is about, and a selection wins over an
+  image because you chose it. The agent opens the file and answers from what is in
+  it, and the conversation note keeps the image as an `![[embed]]` above the
+  question, so it shows the thing that was asked about rather than a path to it.
+  Works with `![[wikilink]]` and `![](markdown)` embeds alike — right-click the
+  picture itself, or put the caret on the line it is written on.
 - **Asking opens a conversation of its own**, so a question about a passage does
   not land in the middle of the thread you had going about something else.
 - **Follow up** in the same conversation, from the box under the answer or from
@@ -155,6 +163,8 @@ claude --print --output-format stream-json --include-partial-messages --verbose 
   note question can reach.
 - Reads `CLAUDE.md` from the vault root, and takes the plugin's system prompt
   through `--append-system-prompt`.
+- A question about an image is answered by `Read`, which opens images as images.
+  The prompt names the file by absolute path, because that is what `Read` takes.
 
 ### Codex
 
@@ -172,6 +182,13 @@ read tool. Reads only, but a wider door than Claude's.
 your `~/.codex/config.toml` and with it the plugins, hooks and MCP servers a note
 question has no business loading. It costs a little — on a stock setup the same
 question went from 52k input tokens to 18k.
+
+A question about an image is the one place that sandbox costs something: no shell
+command shows a model a PNG, so the file is attached with `--image` instead of
+named in the prompt. It goes in as `--image=<file>` and not `--image <file>` — on
+a fresh run the flag takes many values, and given a space it swallows the prompt
+positional after it as a second image, leaving Codex waiting on stdin for a
+question that was never asked.
 
 Codex has no flag for a system prompt, so the plugin's rides in ahead of the
 question. Prepended alone it ignored the follow-up block on every question tried,
@@ -316,6 +333,7 @@ sidebar font size against the note's, whether the footer clears the status bar.
 ```js
 await window.ask("What happens above the cutoff?")   // typed into the box
 await window.askAbout("What is this?", { selection: "…" })   // the right-click path
+await window.askAbout("What is this?", { image: window.image })   // and about an image
 window.focused()                                     // where the caret is
 window.spawned                                       // what each CLI was asked
 window.thread(); window.branch()                     // the cold Ask button, and leaving the thread
@@ -380,6 +398,19 @@ a bump that skipped this would tag a release that never ships.
   append text, replace the message, clear the turn, a tool label, usage, an
   answer, a failure. Claude streams tokens, Codex delivers whole messages, Gemini
   streams tokens with no marker between turns; `runner.ts` does not know which.
+- Which image a question is about is read twice over, because neither way covers
+  the other. `editor-menu` says which editor was right-clicked and not what in it
+  was, and live preview draws an embed as a widget the caret does not move into —
+  so a right-click on the picture is caught by a capturing `contextmenu` listener
+  and read off the `.internal-embed` wrapper's `src`. With the caret on the line
+  instead, `embeds.ts` finds the embed by position. Both resolve through
+  `getFirstLinkpathDest`, so a bare name, a vault path and a note-relative path
+  all land on the same file, and a remote URL lands on none.
+- What a question is about beyond the note — a passage, an image — is one
+  `AskContext` threaded from the right-click menu to the prompt, the pane and the
+  conversation note. It reaches a resumed session too: the agent already has the
+  note, but not the thing you just picked, and sending the bare question dropped
+  it.
 - A session belongs to the agent that opened it. Switching agent mid-conversation
   starts a new one rather than handing a Codex thread id to Claude, and the
   questions and answers so far go into that first prompt so the new agent is not

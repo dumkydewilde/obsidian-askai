@@ -83,9 +83,9 @@ export class Component {
 	registerEvent(ref) {
 		if (ref?.off) this._cleanups.push(() => ref.off());
 	}
-	registerDomEvent(el, type, fn) {
-		el.addEventListener(type, fn);
-		this._cleanups.push(() => el.removeEventListener(type, fn));
+	registerDomEvent(el, type, fn, options) {
+		el.addEventListener(type, fn, options);
+		this._cleanups.push(() => el.removeEventListener(type, fn, options));
 	}
 	addChild(child) {
 		this._children.push(child);

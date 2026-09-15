@@ -1,5 +1,6 @@
 import { ItemView, TAbstractFile, TFile, WorkspaceLeaf, setIcon, setTooltip } from "obsidian";
 import type { AskOptions } from "./conversation";
+import type { AskContext } from "./document";
 import type AskAiPlugin from "./main";
 import { NoteHost } from "./notehost";
 
@@ -155,9 +156,9 @@ export class AskView extends ItemView {
 	}
 
 	/** Show this note's conversations and run a question in one of them. */
-	async ask(file: TFile, options: AskOptions, question: string, selection: string | null, fresh: boolean): Promise<void> {
+	async ask(file: TFile, options: AskOptions, question: string, context: AskContext, fresh: boolean): Promise<void> {
 		const host = this.show(file);
-		await host?.ask(options, question, selection, fresh);
+		await host?.ask(options, question, context, fresh);
 	}
 
 	/** A second conversation about the same note, rather than adding to the open one. */

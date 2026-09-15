@@ -1,5 +1,6 @@
 import { App, Component, Modal, Setting, TFile } from "obsidian";
-import { Conversation, type AskOptions, type ConversationRecord } from "./conversation";
+import { Conversation, renderAskedImage, type AskOptions, type ConversationRecord } from "./conversation";
+import type { AskContext } from "./document";
 import type AskAiPlugin from "./main";
 import { PROVIDER_LABELS, providerOrDefault, type ProviderId } from "./providers";
 import { effortFor, modelOptionsFor, WEB_OPTIONS } from "./settings";
@@ -12,11 +13,11 @@ export class QuestionModal extends Modal {
 
 	// Modal owns undocumented fields that the type definitions do not declare, so a
 	// field named `selection` or `title` is silently overwritten when the modal opens.
-	// Hence `heading` and `selectedText`.
+	// Hence `heading` and `asked`.
 	constructor(
 		app: App,
 		private heading: string,
-		private selectedText: string | null,
+		private asked: AskContext,
 		defaults: AskOptions,
 		/** Model per agent, so switching agents picks up that agent's own default. */
 		private modelFor: (provider: ProviderId) => string,
@@ -30,8 +31,11 @@ export class QuestionModal extends Modal {
 		this.setTitle(this.heading);
 		const { contentEl } = this;
 
-		if (this.selectedText) {
-			contentEl.createDiv({ cls: "ask-ai-selection", text: this.selectedText });
+		// What the question is about, shown before the box, so it is obvious which passage
+		// or which image the answer is going to be about.
+		if (this.asked.image) renderAskedImage(this.app, contentEl, this.asked.image);
+		if (this.asked.selection) {
+			contentEl.createDiv({ cls: "ask-ai-selection", text: this.asked.selection });
 		}
 
 		const input = contentEl.createEl("textarea", {
@@ -131,7 +135,7 @@ export class AnswerModal extends Modal {
 		this.contentEl.empty();
 	}
 
-	ask(question: string, selection: string | null): Promise<void> {
-		return this.conversation.ask(question, selection);
+	ask(question: string, context: AskContext): Promise<void> {
+		return this.conversation.ask(question, context);
 	}
 }

@@ -1,6 +1,7 @@
 import { Editor, FileSystemAdapter, MarkdownView, Menu, Notice, Plugin, TFile, WorkspaceLeaf } from "obsidian";
 import { newRecord, type AskOptions, type ConversationRecord } from "./conversation";
-import { oneLine, safeName } from "./document";
+import { oneLine, safeName, type AskContext } from "./document";
+import { imageEmbedAt, isImagePath } from "./embeds";
 import { AnswerModal, QuestionModal } from "./modals";
 import { isProviderId, PROVIDERS, type ProviderId } from "./providers";
 import { conversationsFor, createConversation, localTimestamp, readConversation, titleOf } from "./store";
@@ -22,6 +23,8 @@ export default class AskAiPlugin extends Plugin {
 	declare settings: AskAiSettings;
 	/** Conversations an older settings file was still holding, written out as notes below. */
 	private legacy: Record<string, LegacySession> = {};
+	/** What the last right-click landed on, for a menu item that depends on it. */
+	private rightClicked: HTMLElement | null = null;
 
 	override async onload(): Promise<void> {
 		await this.loadSettings();
@@ -34,7 +37,7 @@ export default class AskAiPlugin extends Plugin {
 			checkCallback: (checking) => {
 				const file = this.activeFile();
 				if (!file) return false;
-				if (!checking) void this.startAsk(file, null, { fresh: true });
+				if (!checking) void this.startAsk(file, {}, { fresh: true });
 				return true;
 			},
 		});
@@ -46,7 +49,19 @@ export default class AskAiPlugin extends Plugin {
 				const file = view instanceof MarkdownView ? view.file : null;
 				const selection = editor.getSelection().trim();
 				if (!file || !selection) return false;
-				if (!checking) void this.startAsk(file, selection, { fresh: true });
+				if (!checking) void this.startAsk(file, { selection }, { fresh: true });
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: "ask-about-image",
+			name: "Ask about the image at the cursor",
+			editorCheckCallback: (checking, editor, view) => {
+				const file = view instanceof MarkdownView ? view.file : null;
+				const image = file ? this.imageAtCursor(editor, file) : null;
+				if (!file || !image) return false;
+				if (!checking) void this.startAsk(file, { image }, { fresh: true });
 				return true;
 			},
 		});
@@ -64,22 +79,36 @@ export default class AskAiPlugin extends Plugin {
 			checkCallback: (checking) => {
 				const file = this.activeFile();
 				if (!file) return false;
-				if (!checking) void this.startAsk(file, null, { fresh: false });
+				if (!checking) void this.startAsk(file, {}, { fresh: false });
 				return true;
 			},
 		});
+
+		// `editor-menu` says which editor was right-clicked, not what in it was. In live
+		// preview an image is drawn as a widget the caret does not move into, so the click
+		// is the only thing that knows which image you meant. Capture, so it has landed
+		// before Obsidian builds the menu below.
+		this.registerDomEvent(
+			document,
+			"contextmenu",
+			(event) => {
+				this.rightClicked = event.target instanceof HTMLElement ? event.target : null;
+			},
+			{ capture: true },
+		);
 
 		this.registerEvent(
 			this.app.workspace.on("editor-menu", (menu: Menu, editor: Editor, view) => {
 				const file = view instanceof MarkdownView ? view.file : null;
 				if (!file) return;
-				const selection = editor.getSelection().trim();
+				const context = this.editorContext(editor, file);
+				const about = context.selection ? "the selection" : context.image ? "this image" : "this note";
 
 				menu.addItem((item) =>
 					item
-						.setTitle(selection ? "Ask AI about the selection" : "Ask AI about this note")
-						.setIcon("message-square")
-						.onClick(() => void this.startAsk(file, selection || null, { fresh: true })),
+						.setTitle(`Ask AI about ${about}`)
+						.setIcon(context.image ? "image" : "message-square")
+						.onClick(() => void this.startAsk(file, context, { fresh: true })),
 				);
 
 				// Asking opens a conversation of its own, so this is the way to add to one
@@ -89,9 +118,13 @@ export default class AskAiPlugin extends Plugin {
 					if (conversationsFor(this.app, file).length) {
 						menu.addItem((item) =>
 							item
-								.setTitle(selection ? "Follow up about the selection" : "Follow up in the open conversation")
+								.setTitle(
+									context.selection || context.image
+										? `Follow up about ${about}`
+										: "Follow up in the open conversation",
+								)
 								.setIcon("corner-down-right")
-								.onClick(() => void this.startAsk(file, selection || null, { fresh: false })),
+								.onClick(() => void this.startAsk(file, context, { fresh: false })),
 						);
 					}
 					return;
@@ -105,7 +138,7 @@ export default class AskAiPlugin extends Plugin {
 						item
 							.setTitle(`Follow up on ${titleOf(latest, file)}${with_}`)
 							.setIcon("corner-down-right")
-							.onClick(() => void this.startAsk(file, selection || null, { fresh: false })),
+							.onClick(() => void this.startAsk(file, context, { fresh: false })),
 					);
 				}
 			}),
@@ -118,7 +151,7 @@ export default class AskAiPlugin extends Plugin {
 					item
 						.setTitle("Ask AI about this note")
 						.setIcon("message-square")
-						.onClick(() => void this.startAsk(file, null, { fresh: true })),
+						.onClick(() => void this.startAsk(file, {}, { fresh: true })),
 				);
 			}),
 		);
@@ -177,7 +210,7 @@ export default class AskAiPlugin extends Plugin {
 	 * The agent reads the note off disk, so flush the editor buffer first. Without this a
 	 * question asked seconds after typing gets answered against the previous text.
 	 */
-	private async startAsk(file: TFile, selection: string | null, options: { fresh: boolean }): Promise<void> {
+	private async startAsk(file: TFile, context: AskContext, options: { fresh: boolean }): Promise<void> {
 		if (!this.vaultPathOrNull()) {
 			new Notice("Ask AI needs a vault stored on disk.");
 			return;
@@ -192,15 +225,17 @@ export default class AskAiPlugin extends Plugin {
 
 		const record = options.fresh ? newRecord() : await this.latestRecord(file);
 		const title = options.fresh
-			? selection
+			? context.selection
 				? "Ask about the selection"
-				: `Ask about ${file.basename}`
+				: context.image
+					? "Ask about the image"
+					: `Ask about ${file.basename}`
 			: `Follow up about ${file.basename}`;
 
 		new QuestionModal(
 			this.app,
 			title,
-			selection,
+			context,
 			this.askOptions(record.agent),
 			(id: ProviderId) => this.settings.models[id] ?? "",
 			(question, chosen) => {
@@ -210,7 +245,7 @@ export default class AskAiPlugin extends Plugin {
 				this.settings.effort = chosen.effort;
 				this.settings.web = chosen.web;
 				void this.saveSettings();
-				void this.startConversation(file, record, chosen, question, selection, options.fresh);
+				void this.startConversation(file, record, chosen, question, context, options.fresh);
 			},
 		).open();
 	}
@@ -220,19 +255,19 @@ export default class AskAiPlugin extends Plugin {
 		record: ConversationRecord,
 		options: AskOptions,
 		question: string,
-		selection: string | null,
+		context: AskContext,
 		fresh: boolean,
 	): Promise<void> {
 		// A follow-up joins the conversation that is open; "Ask about…" starts its own,
 		// because a question about a passage has nothing to do with the thread already there.
 		if (this.settings.surface === "sidebar") {
 			const view = await this.revealSidebar();
-			await view.ask(file, options, question, selection, fresh);
+			await view.ask(file, options, question, context, fresh);
 			return;
 		}
 		const modal = new AnswerModal(this.app, this, file, record, options);
 		modal.open();
-		void modal.ask(question, selection);
+		void modal.ask(question, context);
 	}
 
 	/** Reuse the open sidebar if there is one, otherwise put a new one on the right. */
@@ -265,6 +300,49 @@ export default class AskAiPlugin extends Plugin {
 		const latest = conversationsFor(this.app, file)[0];
 		if (!latest) return newRecord();
 		return { file: latest, title: titleOf(latest, file), suggestions: [], ...(await readConversation(this.app, latest)) };
+	}
+
+	/**
+	 * What a question asked from the editor is about. A highlighted passage wins, because
+	 * you chose it; otherwise an image the caret is in, so right-clicking a diagram asks
+	 * about the diagram rather than about the note it happens to sit in.
+	 */
+	private editorContext(editor: Editor, file: TFile): AskContext {
+		// Consumed rather than kept, so a menu opened from the keyboard afterwards does not
+		// pick up the image from whatever was right-clicked before it.
+		const clicked = this.rightClicked;
+		this.rightClicked = null;
+		const selection = editor.getSelection().trim();
+		if (selection) return { selection };
+		return { image: this.imageUnderPointer(clicked, file) ?? this.imageAtCursor(editor, file) };
+	}
+
+	/**
+	 * The image a right-click landed on. Obsidian renders an embed inside an element
+	 * carrying the link as it was written, which is the one thing on screen that still
+	 * knows which file the picture came from.
+	 */
+	private imageUnderPointer(clicked: HTMLElement | null, file: TFile): string | null {
+		const written = clicked?.closest<HTMLElement>(".internal-embed[src]")?.getAttribute("src");
+		return written ? this.resolveImage(written, file) : null;
+	}
+
+	/** The vault path of the image the caret is on, when it is on one we can read. */
+	private imageAtCursor(editor: Editor, file: TFile): string | null {
+		const cursor = editor.getCursor();
+		const embed = imageEmbedAt(editor.getLine(cursor.line) ?? "", cursor.ch);
+		return embed ? this.resolveImage(embed.target, file) : null;
+	}
+
+	/**
+	 * A link as it was written to a file in the vault. Through Obsidian's own resolver, so
+	 * a bare name, a vault-relative path and one relative to this note all land on the
+	 * same file — and a remote URL on none, since an agent reading the vault cannot open it.
+	 */
+	private resolveImage(written: string, file: TFile): string | null {
+		const target = written.split("|")[0].split("#")[0].trim();
+		const dest = this.app.metadataCache.getFirstLinkpathDest(target, file.path);
+		return dest && isImagePath(dest.path) ? dest.path : null;
 	}
 
 	private activeFile(): TFile | null {

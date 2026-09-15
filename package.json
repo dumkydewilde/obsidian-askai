@@ -1,6 +1,6 @@
 {
   "name": "ask-ai",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Ask a coding-agent CLI about the note you are reading, in Obsidian",
   "private": true,
   "scripts": {

@@ -21,6 +21,8 @@ export interface AskRequest {
 	newSessionId?: string;
 	/** Whether this is the first question of the conversation, which names it. */
 	firstTurn: boolean;
+	/** Absolute path of an image the question is about, for a CLI that attaches one. */
+	imagePath?: string;
 	model: string;
 	effort: string;
 	web: boolean;
@@ -87,6 +89,7 @@ export function runAgent(
 			resumeSessionId: request.resumeSessionId,
 			newSessionId: request.newSessionId,
 			firstTurn: request.firstTurn,
+			imagePath: request.imagePath,
 			model: request.model,
 			effort: request.effort,
 			web: request.web,

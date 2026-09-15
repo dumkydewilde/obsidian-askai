@@ -98,6 +98,9 @@ export function createApp({ data, notes, activePath, leafContainer }) {
 	const vault = Object.assign(new Events(), {
 		adapter: new FileSystemAdapter(),
 		getAbstractFileByPath: (path) => files.get(path) ?? folders.get(path) ?? null,
+		// There is no disk here, so a file is its content: for an image the harness seeds
+		// that content as a data URL, which is exactly what an <img src> wants.
+		getResourcePath: (file) => contents.get(file.path) ?? file.path,
 		getMarkdownFiles: () => [...files.values()].filter((file) => file.extension === "md"),
 		cachedRead: async (file) => contents.get(file.path) ?? "",
 		read: async (file) => contents.get(file.path) ?? "",

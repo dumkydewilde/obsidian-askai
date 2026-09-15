@@ -8,7 +8,7 @@
 //
 // Costs a few cents in agent usage and takes a couple of minutes per agent.
 
-import { mkdtemp, writeFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -30,7 +30,16 @@ await esbuild.build({
 const { runAgent } = await import(pathToFileURL(join(outdir, "runner.js")).href);
 const { PROVIDERS, PROVIDER_IDS } = await import(pathToFileURL(join(outdir, "providers.js")).href);
 const { splitTrailing } = await import(pathToFileURL(join(outdir, "trailing.js")).href);
-const { DEFAULT_SYSTEM_PROMPT } = await import(pathToFileURL(join(outdir, "prompt.js")).href);
+const { DEFAULT_SYSTEM_PROMPT, buildPrompt, followUpPrompt, imagePathFor } = await import(
+	pathToFileURL(join(outdir, "prompt.js")).href
+);
+
+// Three colour bands, top to bottom: purple, yellow, teal. Inline so the suite needs no
+// fixture, and unguessable from the filename, which is the whole point of asking.
+const BANDS_PNG = Buffer.from(
+	"iVBORw0KGgoAAAANSUhEUgAAAGAAAACQCAIAAAB4aPl2AAAA0ElEQVR42u3QQQ0AIAwEsDlCIHJmCS88wcH+lzSpgtZel0EpECRIkCBBggQJQpAgQYIECRIkCEGCBAkSJEiQIAQJEiRIkCBBggQhSJAgQYIECRKEIEGCBAkKCXqHiQJBggQJEiRIkCAECRIkSJAgQYIQJEiQIEGCBAlCkCBBggQJEiRIEIIECRIkSJAgQQgSJEiQoJSg6maiQJAgQYIECRIkCEGCBAkSJEiQIAQJEiRIkCBBghAkSJAgQYIECRKEIEGCBAkSJEgQggQJEiQowwe88Bj8VTF8LQAAAABJRU5ErkJggg==",
+	"base64",
+);
 
 const settings = {
 	provider: "claude",
@@ -69,7 +78,7 @@ function check(name, passed, detail) {
 	if (!passed) failures.push(name);
 }
 
-async function ask(provider, vault, prompt, resumeSessionId, overrides = {}) {
+async function ask(provider, vault, prompt, resumeSessionId, overrides = {}, imagePath) {
 	const tools = [];
 	let streamed = "";
 	const result = await runAgent(
@@ -77,6 +86,7 @@ async function ask(provider, vault, prompt, resumeSessionId, overrides = {}) {
 		{
 			vaultPath: vault,
 			prompt,
+			imagePath,
 			provider,
 			resumeSessionId,
 			newSessionId: resumeSessionId ? undefined : crypto.randomUUID(),
@@ -101,6 +111,9 @@ async function runProvider(id) {
 	const vault = await mkdtemp(join(tmpdir(), "ask-ai-vault-"));
 	await writeFile(join(vault, "Ducks.md"), "# Ducks\n\n## Claim\n\nDucks are good. See [[Geese]].\n");
 	await writeFile(join(vault, "Geese.md"), "# Geese\n\nGeese are aggressive and should be avoided.\n");
+	// A filename that gives nothing away, in a folder, with a space in it.
+	await mkdir(join(vault, "attachments"), { recursive: true });
+	await writeFile(join(vault, "attachments", "figure 2.png"), BANDS_PNG);
 
 	try {
 		// A fresh question reads the note and follows the wikilink.
@@ -120,6 +133,40 @@ async function runProvider(id) {
 			const second = await ask(id, vault, "Which heading was that claim under? Answer with the heading only.", first.sessionId);
 			check(`${id}: follow-up resumes the session`, second.sessionId === first.sessionId);
 			check(`${id}: follow-up kept context`, /claim/i.test(second.answer), second.answer.slice(0, 70));
+		}
+
+		// A question about an image only works if the agent opens the image. Claude and
+		// Gemini are told the path and read it; Codex reads notes with shell commands, and
+		// no shell command shows it a PNG, so for it the file is attached instead.
+		const context = { image: "attachments/figure 2.png" };
+		const colours = "Name the three colour bands in this image from top to bottom, in order, as three words.";
+		const image = await ask(
+			id,
+			vault,
+			buildPrompt(vault, "Ducks.md", colours, context),
+			undefined,
+			{},
+			imagePathFor(vault, context),
+		);
+		const bands = /(purple|violet).*(yellow|gold).*(teal|cyan|turquoise|green)/is.test(image.answer);
+		check(`${id}: answered from the image`, bands, image.answer.split("\n")[0].slice(0, 90));
+
+		// A resumed turn used to be sent as the bare question, which dropped the passage or
+		// the image the right-click menu had just been used to pick.
+		if (provider.capabilities.resume && image.sessionId) {
+			const again = await ask(
+				id,
+				vault,
+				followUpPrompt(vault, "Which band is the widest? Answer with its colour only.", context),
+				image.sessionId,
+				{},
+				imagePathFor(vault, context),
+			);
+			check(
+				`${id}: a follow-up still has the image`,
+				/purple|yellow|teal|equal|same/i.test(again.answer),
+				again.answer.split("\n")[0].slice(0, 90),
+			);
 		}
 
 		// The follow-up buttons only exist if the agent actually emits the block the
